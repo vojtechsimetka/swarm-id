@@ -75,6 +75,38 @@ export {
   serializePostageStamp,
 } from "./utils/storage-managers"
 
+// Epoch-based feeds - implementations
+export {
+  EpochIndex,
+  SyncEpochFinder,
+  AsyncEpochFinder,
+  BasicEpochUpdater,
+  lca,
+  next,
+  createSyncEpochFinder,
+  createAsyncEpochFinder,
+  createEpochUpdater,
+  createEpochFinder, // deprecated alias for createSyncEpochFinder
+  MAX_LEVEL,
+} from "./proxy/feeds/epochs"
+
+// State sync to Swarm
+export {
+  StateSyncManager,
+  deriveIdentityBackupKey,
+  deriveIdentityEncryptionKey,
+  backupKeyToPrivateKey,
+  serializeIdentityState,
+  deserializeIdentityState,
+} from "./sync"
+
+// State sync types
+export type {
+  IdentityStateSnapshot,
+  StateSyncOptions,
+  SyncResult,
+} from "./sync"
+
 // Type exports
 export type {
   ClientOptions,
@@ -112,6 +144,16 @@ export type {
   Serializer,
   VersionedStorageOptions,
 } from "./utils/versioned-storage"
+
+// Epoch feed types
+export type {
+  Epoch,
+  EpochFinder,
+  EpochUpdater,
+  EpochFeedOptions,
+  EpochFeedWriterOptions,
+  EpochLookupResult,
+} from "./proxy/feeds/epochs"
 
 // Schema exports (for validation)
 export {
