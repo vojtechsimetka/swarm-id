@@ -27,7 +27,6 @@
 
 	let selectedIdentity = $state<Identity | undefined>(undefined)
 	let error = $state<string | undefined>(undefined)
-	let showCreateMode = $state(false)
 	let authenticated = $state(false)
 	let selectedAccountId = $state<EthAddress | undefined>(undefined)
 	const selectedAccount = $derived(
@@ -41,7 +40,7 @@
 		if (!accountId) return allIdentities
 		return allIdentities.filter((identity) => identity.accountId.equals(accountId))
 	})
-	const hasIdentities = $derived(identities.length > 0)
+	const hasAccounts = $derived(accountsStore.accounts.length > 0)
 	const origin = window.location.origin
 
 	// Parse hash params (e.g., #origin=foo&appName=bar)
@@ -139,10 +138,6 @@
 		if (!error && !sessionStore.data.currentIdentityId) {
 			closeWindowWithSessionCleanup()
 		}
-	}
-
-	function handleCreateNew() {
-		showCreateMode = true
 	}
 
 	function getIdentityPostageBatchId(identity: Identity): string | undefined {
@@ -290,10 +285,10 @@
 		appDescription={sessionStore.data.appData.appDescription}
 	/>
 
-	{#if hasIdentities && !showCreateMode}
+	{#if hasAccounts}
 		<!-- Show identity list -->
 		<Vertical --vertical-gap="var(--double-padding)">
-			<AccountSelector bind:selectedAccount={selectedAccountId} onCreateAccount={handleCreateNew} />
+			<AccountSelector bind:selectedAccount={selectedAccountId} />
 			<IdentityGroups
 				{identities}
 				appUrl={sessionStore.data.appOrigin}
@@ -304,7 +299,7 @@
 			</Horizontal>
 		</Vertical>
 	{:else}
-		<!-- No identities, show create form -->
+		<!-- No accounts, show create form -->
 		<CreateNewAccount />
 	{/if}
 {/if}
