@@ -132,6 +132,21 @@
 
 	async function selectIdentityForConnection(identity: Identity) {
 		selectedIdentity = identity
+
+		// Check if there's a valid existing connection
+		if (sessionStore.data.appOrigin) {
+			const validConnection = connectedAppsStore.getValidConnection(
+				sessionStore.data.appOrigin,
+				identity.id,
+			)
+			if (validConnection?.appSecret) {
+				// Reuse the existing connection
+				updateSelectedIdentity(validConnection.appSecret)
+				authenticated = true
+				return
+			}
+		}
+
 		await handleAuthenticate()
 
 		// If this was an existing identity then close the window automatically
@@ -149,6 +164,10 @@
 		return postageStamp
 	}
 
+	function isDevelopmentEnvironment(): boolean {
+		return window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
+	}
+
 	function updateSelectedIdentity(appSecret: string) {
 		if (!selectedIdentity) {
 			return
@@ -162,8 +181,6 @@
 			return
 		}
 
-		// FIXME: Generate random postage batch ID for testing
-		// In production, use the identity's default postage stamp or let user choose
 		const postageStamp = getIdentityPostageStamp(selectedIdentity)
 
 		// Send secret to opener (the iframe that opened this popup)
@@ -172,19 +189,25 @@
 			return
 		}
 
+		// In development mode, include postageBatchId/signerKey in the message
+		// because the proxy's localStorage is partitioned and can't access shared storage.
+		// In production, the proxy looks up stamps from shared storage.
+		// TODO: see https://github.com/snaha/swarm-id/issues/124
+		const isDevelopment = isDevelopmentEnvironment()
+
 		const message: SetSecretMessage = {
 			type: 'setSecret',
 			appOrigin: sessionStore.data.appOrigin,
 			data: {
 				secret: appSecret,
-				postageBatchId: postageStamp?.batchID.toHex(),
-				signerKey: postageStamp?.signerKey.toHex(),
+				postageBatchId: isDevelopment ? postageStamp?.batchID.toHex() : undefined,
+				signerKey: isDevelopment ? postageStamp?.signerKey.toHex() : undefined,
 			},
 		}
 
 		;(window.opener as Window).postMessage(message, window.location.origin)
 
-		// Track this app connection
+		// Track this app connection with appSecret in shared storage
 		connectedAppsStore.addOrUpdateApp(
 			{
 				appUrl: sessionStore.data.appOrigin,
@@ -192,6 +215,7 @@
 				identityId: selectedIdentity.id,
 				appIcon: sessionStore.data.appData.appIcon,
 				appDescription: sessionStore.data.appData.appDescription,
+				appSecret,
 			},
 			DEFAULT_SESSION_DURATION,
 		)

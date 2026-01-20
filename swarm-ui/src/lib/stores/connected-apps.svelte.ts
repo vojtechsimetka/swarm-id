@@ -44,6 +44,7 @@ export const connectedAppsStore = {
 		appData: Omit<ConnectedApp, 'lastConnectedAt'> & {
 			appIcon?: string
 			appDescription?: string
+			appSecret?: string
 		},
 		defaultConnectionTime: number,
 	): ConnectedApp {
@@ -59,6 +60,7 @@ export const connectedAppsStore = {
 				appName: appData.appName,
 				appIcon: appData.appIcon ?? existingApp.appIcon,
 				appDescription: appData.appDescription ?? existingApp.appDescription,
+				appSecret: appData.appSecret ?? existingApp.appSecret,
 				lastConnectedAt: now,
 				connectedUntil: now + defaultConnectionTime,
 			}
@@ -77,6 +79,7 @@ export const connectedAppsStore = {
 				identityId: appData.identityId,
 				appIcon: appData.appIcon,
 				appDescription: appData.appDescription,
+				appSecret: appData.appSecret,
 				lastConnectedAt: now,
 				connectedUntil: now + defaultConnectionTime,
 			}
@@ -88,6 +91,14 @@ export const connectedAppsStore = {
 
 	getApp(appUrl: string): ConnectedApp | undefined {
 		return connectedApps.find((app) => app.appUrl === appUrl)
+	},
+
+	// Get a connected app for a specific appUrl and identityId if the connection is still valid
+	getValidConnection(appUrl: string, identityId: string): ConnectedApp | undefined {
+		const app = connectedApps.find((a) => a.appUrl === appUrl && a.identityId === identityId)
+		if (!app?.connectedUntil || !app.appSecret) return undefined
+		if (app.connectedUntil <= Date.now()) return undefined
+		return app
 	},
 
 	// Get identity IDs that have connected to a specific app URL
