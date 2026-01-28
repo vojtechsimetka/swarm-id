@@ -6,6 +6,7 @@ import type {
   FileData,
   UploadOptions,
   DownloadOptions,
+  RequestOptions,
   Reference,
   ParentToIframeMessage,
   IframeToParentMessage,
@@ -164,7 +165,7 @@ export class SwarmIdClient {
    * @returns A promise that resolves when the client is fully initialized
    * @throws {Error} If the client is already initialized
    * @throws {Error} If the iframe fails to load
-   * @throws {Error} If the proxy does not respond within the timeout period (10 seconds)
+   * @throws {Error} If the proxy does not respond within the timeout period (30 seconds)
    * @throws {Error} If origin validation fails on the proxy side
    *
    * @example
@@ -667,6 +668,43 @@ export class SwarmIdClient {
   }
 
   // ============================================================================
+  // Bee Connectivity Methods
+  // ============================================================================
+
+  /**
+   * Checks whether the Bee node is reachable.
+   *
+   * @returns A promise resolving to `true` if the Bee node is reachable, `false` otherwise
+   * @throws {Error} If the client is not initialized
+   * @throws {Error} If the request times out
+   *
+   * @example
+   * ```typescript
+   * const connected = await client.isBeeConnected()
+   * if (connected) {
+   *   console.log('Bee node is online')
+   * } else {
+   *   console.log('Bee node is offline')
+   * }
+   * ```
+   */
+  async isBeeConnected(): Promise<boolean> {
+    this.ensureReady()
+    const requestId = this.generateRequestId()
+
+    const response = await this.sendRequest<{
+      type: "isConnectedResponse"
+      requestId: string
+      connected: boolean
+    }>({
+      type: "isConnected",
+      requestId,
+    })
+
+    return response.connected
+  }
+
+  // ============================================================================
   // Data Upload/Download Methods
   // ============================================================================
 
@@ -683,7 +721,8 @@ export class SwarmIdClient {
    * @param options.tag - Tag ID for tracking upload progress
    * @param options.deferred - Whether to use deferred upload (defaults to false)
    * @param options.redundancyLevel - Redundancy level from 0-4 for data availability
-   * @param onProgress - Optional callback for tracking upload progress
+   * @param options.onProgress - Optional callback for tracking upload progress
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the upload result
    * @returns return.reference - The Swarm reference (hash) of the uploaded data
    * @returns return.tagUid - The tag UID if a tag was created
@@ -694,8 +733,11 @@ export class SwarmIdClient {
    * @example
    * ```typescript
    * const data = new TextEncoder().encode('Hello, Swarm!')
-   * const result = await client.uploadData(data, { encrypt: true }, (progress) => {
-   *   console.log(`Progress: ${progress.processed}/${progress.total}`)
+   * const result = await client.uploadData(data, {
+   *   encrypt: true,
+   *   onProgress: (progress) => {
+   *     console.log(`Progress: ${progress.processed}/${progress.total}`)
+   *   },
    * })
    * console.log('Reference:', result.reference)
    * ```
@@ -703,10 +745,11 @@ export class SwarmIdClient {
   async uploadData(
     data: Uint8Array,
     options?: UploadOptions,
-    onProgress?: (progress: { total: number; processed: number }) => void,
+    requestOptions?: RequestOptions,
   ): Promise<UploadResult> {
     this.ensureReady()
     const requestId = this.generateRequestId()
+    const { onProgress, ...serializableOptions } = options ?? {}
 
     // Setup progress listener if callback provided
     let progressListener: ((event: MessageEvent) => void) | undefined
@@ -742,7 +785,8 @@ export class SwarmIdClient {
         type: "uploadData",
         requestId,
         data: new Uint8Array(data),
-        options,
+        options: serializableOptions,
+        requestOptions,
         enableProgress: !!onProgress,
       })
 
@@ -770,6 +814,7 @@ export class SwarmIdClient {
    * @param options.actPublisher - ACT publisher for encrypted content
    * @param options.actHistoryAddress - ACT history address for encrypted content
    * @param options.actTimestamp - ACT timestamp for encrypted content
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the downloaded data as a Uint8Array
    * @throws {Error} If the client is not initialized
    * @throws {Error} If the reference is not found
@@ -785,6 +830,7 @@ export class SwarmIdClient {
   async downloadData(
     reference: Reference,
     options?: DownloadOptions,
+    requestOptions?: RequestOptions,
   ): Promise<Uint8Array> {
     this.ensureReady()
     const requestId = this.generateRequestId()
@@ -798,6 +844,7 @@ export class SwarmIdClient {
       requestId,
       reference,
       options,
+      requestOptions,
     })
 
     return response.data
@@ -822,6 +869,7 @@ export class SwarmIdClient {
    * @param options.tag - Tag ID for tracking upload progress
    * @param options.deferred - Whether to use deferred upload (defaults to false)
    * @param options.redundancyLevel - Redundancy level from 0-4 for data availability
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the upload result
    * @returns return.reference - The Swarm reference (hash) of the uploaded file
    * @returns return.tagUid - The tag UID if a tag was created
@@ -845,9 +893,11 @@ export class SwarmIdClient {
     file: File | Uint8Array,
     name?: string,
     options?: UploadOptions,
+    requestOptions?: RequestOptions,
   ): Promise<UploadResult> {
     this.ensureReady()
     const requestId = this.generateRequestId()
+    const { onProgress: _onProgress, ...serializableOptions } = options ?? {}
 
     let data: Uint8Array<ArrayBuffer>
     let fileName: string | undefined = name
@@ -874,7 +924,8 @@ export class SwarmIdClient {
       requestId,
       data,
       name: fileName,
-      options,
+      options: serializableOptions,
+      requestOptions,
     })
 
     return {
@@ -899,6 +950,7 @@ export class SwarmIdClient {
    * @param options.actPublisher - ACT publisher for encrypted content
    * @param options.actHistoryAddress - ACT history address for encrypted content
    * @param options.actTimestamp - ACT timestamp for encrypted content
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the file data object
    * @returns return.name - The filename
    * @returns return.data - The file contents as a Uint8Array
@@ -920,6 +972,7 @@ export class SwarmIdClient {
     reference: Reference,
     path?: string,
     options?: DownloadOptions,
+    requestOptions?: RequestOptions,
   ): Promise<FileData> {
     this.ensureReady()
     const requestId = this.generateRequestId()
@@ -935,6 +988,7 @@ export class SwarmIdClient {
       reference,
       path,
       options,
+      requestOptions,
     })
 
     return {
@@ -961,6 +1015,7 @@ export class SwarmIdClient {
    * @param options.tag - Tag ID for tracking upload progress
    * @param options.deferred - Whether to use deferred upload (defaults to false)
    * @param options.redundancyLevel - Redundancy level from 0-4 for data availability
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the upload result
    * @returns return.reference - The Swarm reference (hash) of the uploaded chunk
    * @throws {Error} If the client is not initialized
@@ -978,9 +1033,11 @@ export class SwarmIdClient {
   async uploadChunk(
     data: Uint8Array,
     options?: UploadOptions,
+    requestOptions?: RequestOptions,
   ): Promise<UploadResult> {
     this.ensureReady()
     const requestId = this.generateRequestId()
+    const { onProgress: _onProgress, ...serializableOptions } = options ?? {}
 
     const response = await this.sendRequest<{
       type: "uploadChunkResponse"
@@ -990,7 +1047,8 @@ export class SwarmIdClient {
       type: "uploadChunk",
       requestId,
       data: data as Uint8Array,
-      options,
+      options: serializableOptions,
+      requestOptions,
     })
 
     return {
@@ -1012,6 +1070,7 @@ export class SwarmIdClient {
    * @param options.actPublisher - ACT publisher for encrypted content
    * @param options.actHistoryAddress - ACT history address for encrypted content
    * @param options.actTimestamp - ACT timestamp for encrypted content
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
    * @returns A promise resolving to the chunk data as a Uint8Array
    * @throws {Error} If the client is not initialized
    * @throws {Error} If the reference is not found
@@ -1026,6 +1085,7 @@ export class SwarmIdClient {
   async downloadChunk(
     reference: Reference,
     options?: DownloadOptions,
+    requestOptions?: RequestOptions,
   ): Promise<Uint8Array> {
     this.ensureReady()
     const requestId = this.generateRequestId()
@@ -1039,9 +1099,114 @@ export class SwarmIdClient {
       requestId,
       reference,
       options,
+      requestOptions,
     })
 
     return new Uint8Array(response.data)
+  }
+
+  // ============================================================================
+  // GSOC Methods
+  // ============================================================================
+
+  /**
+   * Mines a private key whose SOC address is proximate to a target overlay.
+   *
+   * This is a synchronous, pure computation that does not require authentication.
+   * The mined signer can be used with {@link gsocSend} to send GSOC messages
+   * that route to the target overlay node.
+   *
+   * @param targetOverlay - The target overlay address to mine proximity for
+   * @param identifier - The GSOC identifier
+   * @param proximity - Optional proximity depth (defaults to 12 in bee-js)
+   * @returns A promise resolving to the mined signer as a hex string (private key)
+   * @throws {Error} If the client is not initialized
+   * @throws {Error} If no valid signer can be mined
+   * @throws {Error} If the request times out
+   *
+   * @example
+   * ```typescript
+   * const signer = await client.gsocMine(targetOverlay, identifier)
+   * // Use signer with gsocSend
+   * await client.gsocSend(signer, identifier, data)
+   * ```
+   */
+  async gsocMine(
+    targetOverlay: string,
+    identifier: string,
+    proximity?: number,
+  ): Promise<string> {
+    this.ensureReady()
+    const requestId = this.generateRequestId()
+
+    const response = await this.sendRequest<{
+      type: "gsocMineResponse"
+      requestId: string
+      signer: string
+    }>({
+      type: "gsocMine",
+      requestId,
+      targetOverlay,
+      identifier,
+      proximity,
+    })
+
+    return response.signer
+  }
+
+  /**
+   * Sends a GSOC (Global Single Owner Chunk) message using a mined signer.
+   *
+   * The signer should be obtained from {@link gsocMine}. The message is sent
+   * using the proxy's stored postage batch ID.
+   *
+   * @param signer - The mined signer as a hex string (from gsocMine)
+   * @param identifier - The GSOC identifier
+   * @param data - The message data to send
+   * @param options - Optional upload configuration
+   * @param requestOptions - Optional request configuration (timeout, headers, endlesslyRetry)
+   * @returns A promise resolving to the upload result with reference and optional tagUid
+   * @throws {Error} If the client is not initialized
+   * @throws {Error} If the user is not authenticated
+   * @throws {Error} If no postage batch ID is available
+   * @throws {Error} If the request times out
+   *
+   * @example
+   * ```typescript
+   * const signer = await client.gsocMine(targetOverlay, identifier)
+   * const result = await client.gsocSend(signer, identifier, new TextEncoder().encode('Hello!'))
+   * console.log('GSOC reference:', result.reference)
+   * ```
+   */
+  async gsocSend(
+    signer: string,
+    identifier: string,
+    data: Uint8Array,
+    options?: UploadOptions,
+    requestOptions?: RequestOptions,
+  ): Promise<UploadResult> {
+    this.ensureReady()
+    const requestId = this.generateRequestId()
+
+    const response = await this.sendRequest<{
+      type: "gsocSendResponse"
+      requestId: string
+      reference: Reference
+      tagUid?: number
+    }>({
+      type: "gsocSend",
+      requestId,
+      signer,
+      identifier,
+      data: new Uint8Array(data),
+      options,
+      requestOptions,
+    })
+
+    return {
+      reference: response.reference,
+      tagUid: response.tagUid,
+    }
   }
 
   // ============================================================================

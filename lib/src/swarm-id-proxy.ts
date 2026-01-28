@@ -13,6 +13,9 @@ import type {
   UploadChunkMessage,
   DownloadChunkMessage,
   GetConnectionInfoMessage,
+  IsConnectedMessage,
+  GsocMineMessage,
+  GsocSendMessage,
   AppMetadata,
   PostageStamp,
   ConnectedApp,
@@ -343,13 +346,25 @@ export class SwarmIdProxy {
       try {
         // Try to parse as parent message first
         if (isParent) {
+          let message: ParentToIframeMessage
           try {
-            const message = ParentToIframeMessageSchema.parse(event.data)
-            await this.handleParentMessage(message, event)
-            return
+            message = ParentToIframeMessageSchema.parse(event.data)
           } catch (error) {
             console.warn("[Proxy] Invalid parent message:", error)
+            return
           }
+
+          try {
+            await this.handleParentMessage(message, event)
+          } catch (error) {
+            console.error("[Proxy] Error handling parent message:", error)
+            this.sendErrorToParent(
+              event,
+              (message as { requestId?: string }).requestId,
+              error instanceof Error ? error.message : "Unknown error",
+            )
+          }
+          return
         }
 
         // Try to parse as popup message
@@ -498,6 +513,18 @@ export class SwarmIdProxy {
 
       case "getConnectionInfo":
         this.handleGetConnectionInfo(message, event)
+        break
+
+      case "isConnected":
+        await this.handleIsConnected(message, event)
+        break
+
+      case "gsocMine":
+        this.handleGsocMine(message, event)
+        break
+
+      case "gsocSend":
+        await this.handleGsocSend(message, event)
         break
 
       default:
@@ -941,6 +968,28 @@ export class SwarmIdProxy {
     console.log("[Proxy] Connection info:", { canUpload, identity })
   }
 
+  private async handleIsConnected(
+    message: IsConnectedMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    console.log("[Proxy] Is connected request...")
+
+    const connected = await this.bee.isConnected()
+
+    if (event.source) {
+      ;(event.source as WindowProxy).postMessage(
+        {
+          type: "isConnectedResponse",
+          requestId: message.requestId,
+          connected,
+        } satisfies IframeToParentMessage,
+        { targetOrigin: event.origin },
+      )
+    }
+
+    console.log("[Proxy] Bee node connected:", connected)
+  }
+
   private handleDisconnect(
     message: { type: "disconnect"; requestId: string },
     event: MessageEvent,
@@ -1243,7 +1292,7 @@ export class SwarmIdProxy {
     message: UploadDataMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, data, options, enableProgress } = message
+    const { requestId, data, options, requestOptions, enableProgress } = message
 
     console.log("[Proxy] Upload data request, size:", data ? data.length : 0)
 
@@ -1296,6 +1345,7 @@ export class SwarmIdProxy {
           undefined, // encryption key (auto-generated)
           options,
           onProgress,
+          requestOptions,
         )
       } else {
         console.log("[Proxy] Using client-side signing for uploadData")
@@ -1304,6 +1354,7 @@ export class SwarmIdProxy {
           data,
           options,
           onProgress,
+          requestOptions,
         )
       }
 
@@ -1337,7 +1388,7 @@ export class SwarmIdProxy {
     message: DownloadDataMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, reference, options } = message
+    const { requestId, reference, options, requestOptions } = message
 
     console.log("[Proxy] Download data request, reference:", reference)
     if (!this.authenticated || !this.appSecret) {
@@ -1348,7 +1399,13 @@ export class SwarmIdProxy {
       console.log("[Proxy] Downloading from Bee at:", this.beeApiUrl)
 
       // Download data using chunk API only (supports both regular and encrypted references)
-      const data = await downloadDataWithChunkAPI(this.bee, reference, options)
+      const data = await downloadDataWithChunkAPI(
+        this.bee,
+        reference,
+        options,
+        undefined,
+        requestOptions,
+      )
 
       console.log("[Proxy] Download successful, data size:", data.length)
 
@@ -1377,7 +1434,7 @@ export class SwarmIdProxy {
     message: UploadFileMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, data, name, options } = message
+    const { requestId, data, name, options, requestOptions } = message
 
     console.log(
       "[Proxy] Upload file request, name:",
@@ -1416,6 +1473,7 @@ export class SwarmIdProxy {
         data,
         name,
         options,
+        requestOptions,
       )
 
       console.log(
@@ -1449,7 +1507,7 @@ export class SwarmIdProxy {
     message: DownloadFileMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, reference, path, options } = message
+    const { requestId, reference, path, options, requestOptions } = message
 
     console.log(
       "[Proxy] Download file request, reference:",
@@ -1465,7 +1523,12 @@ export class SwarmIdProxy {
       console.log("[Proxy] Downloading file from Bee at:", this.beeApiUrl)
 
       // Download file using bee-js
-      const fileData = await this.bee.downloadFile(reference, path, options)
+      const fileData = await this.bee.downloadFile(
+        reference,
+        path,
+        options,
+        requestOptions,
+      )
 
       console.log(
         "[Proxy] File download successful, data size:",
@@ -1501,7 +1564,7 @@ export class SwarmIdProxy {
     message: UploadChunkMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, data, options } = message
+    const { requestId, data, options, requestOptions } = message
 
     console.log("[Proxy] Upload chunk request, size:", data ? data.length : 0)
 
@@ -1554,6 +1617,7 @@ export class SwarmIdProxy {
         envelope,
         chunk.data,
         uploadOptions,
+        requestOptions,
       )
 
       console.log(
@@ -1589,7 +1653,7 @@ export class SwarmIdProxy {
     message: DownloadChunkMessage,
     event: MessageEvent,
   ): Promise<void> {
-    const { requestId, reference, options } = message
+    const { requestId, reference, options, requestOptions } = message
 
     console.log("[Proxy] Download chunk request, reference:", reference)
     if (!this.authenticated || !this.appSecret) {
@@ -1600,7 +1664,11 @@ export class SwarmIdProxy {
       console.log("[Proxy] Downloading chunk from Bee at:", this.beeApiUrl)
 
       // Download chunk using bee-js (returns Uint8Array directly)
-      const data = await this.bee.downloadChunk(reference, options)
+      const data = await this.bee.downloadChunk(
+        reference,
+        options,
+        requestOptions,
+      )
 
       console.log("[Proxy] Chunk download successful, data size:", data.length)
 
@@ -1621,6 +1689,92 @@ export class SwarmIdProxy {
         event,
         requestId,
         error instanceof Error ? error.message : "Download failed",
+      )
+    }
+  }
+
+  private handleGsocMine(
+    message: GsocMineMessage,
+    event: MessageEvent,
+  ): void {
+    const { requestId, targetOverlay, identifier, proximity } = message
+
+    console.log("[Proxy] GSOC mine request, targetOverlay:", targetOverlay)
+
+    try {
+      const signer = this.bee.gsocMine(targetOverlay, identifier, proximity)
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "gsocMineResponse",
+            requestId,
+            signer: signer.toHex(),
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log("[Proxy] GSOC mine successful")
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "GSOC mine failed",
+      )
+    }
+  }
+
+  private async handleGsocSend(
+    message: GsocSendMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const { requestId, signer, identifier, data, options, requestOptions } =
+      message
+
+    console.log("[Proxy] GSOC send request")
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      if (!this.postageBatchId) {
+        throw new Error(
+          "No postage batch ID available. Please authenticate with a valid batch ID.",
+        )
+      }
+
+      const result = await this.bee.gsocSend(
+        this.postageBatchId,
+        signer,
+        identifier,
+        data,
+        options,
+        requestOptions,
+      )
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "gsocSendResponse",
+            requestId,
+            reference: result.reference.toHex(),
+            tagUid: result.tagUid,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log(
+        "[Proxy] GSOC send successful, reference:",
+        result.reference.toHex(),
+      )
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "GSOC send failed",
       )
     }
   }

@@ -54,6 +54,14 @@ export const UploadOptionsSchema = z
   })
   .optional()
 
+export const RequestOptionsSchema = z
+  .object({
+    timeout: z.number().optional(),
+    headers: z.record(z.string(), z.string()).optional(),
+    endlesslyRetry: z.boolean().optional(),
+  })
+  .optional()
+
 export const DownloadOptionsSchema = z
   .object({
     redundancyStrategy: z
@@ -67,7 +75,21 @@ export const DownloadOptionsSchema = z
   })
   .optional()
 
-export type UploadOptions = z.infer<typeof UploadOptionsSchema>
+export interface UploadProgress {
+  total: number
+  processed: number
+}
+
+export interface UploadOptions {
+  pin?: boolean
+  encrypt?: boolean
+  tag?: number
+  deferred?: boolean
+  redundancyLevel?: number
+  onProgress?: (progress: UploadProgress) => void
+}
+
+export type RequestOptions = z.infer<typeof RequestOptionsSchema>
 export type DownloadOptions = z.infer<typeof DownloadOptionsSchema>
 
 // ============================================================================
@@ -237,6 +259,7 @@ export const UploadDataMessageSchema = z.object({
   requestId: z.string(),
   data: z.instanceof(Uint8Array),
   options: UploadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
   enableProgress: z.boolean().optional(),
 })
 
@@ -245,6 +268,7 @@ export const DownloadDataMessageSchema = z.object({
   requestId: z.string(),
   reference: ReferenceSchema,
   options: DownloadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const UploadFileMessageSchema = z.object({
@@ -253,6 +277,7 @@ export const UploadFileMessageSchema = z.object({
   data: z.instanceof(Uint8Array),
   name: z.string().optional(),
   options: UploadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const DownloadFileMessageSchema = z.object({
@@ -261,6 +286,7 @@ export const DownloadFileMessageSchema = z.object({
   reference: ReferenceSchema,
   path: z.string().optional(),
   options: DownloadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const UploadChunkMessageSchema = z.object({
@@ -268,6 +294,7 @@ export const UploadChunkMessageSchema = z.object({
   requestId: z.string(),
   data: z.instanceof(Uint8Array),
   options: UploadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const DownloadChunkMessageSchema = z.object({
@@ -275,11 +302,35 @@ export const DownloadChunkMessageSchema = z.object({
   requestId: z.string(),
   reference: ReferenceSchema,
   options: DownloadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const GetConnectionInfoMessageSchema = z.object({
   type: z.literal("getConnectionInfo"),
   requestId: z.string(),
+})
+
+export const IsConnectedMessageSchema = z.object({
+  type: z.literal("isConnected"),
+  requestId: z.string(),
+})
+
+export const GsocMineMessageSchema = z.object({
+  type: z.literal("gsocMine"),
+  requestId: z.string(),
+  targetOverlay: z.string(),
+  identifier: z.string(),
+  proximity: z.number().optional(),
+})
+
+export const GsocSendMessageSchema = z.object({
+  type: z.literal("gsocSend"),
+  requestId: z.string(),
+  signer: z.string(),
+  identifier: z.string(),
+  data: z.instanceof(Uint8Array),
+  options: UploadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
 })
 
 export const ParentToIframeMessageSchema = z.discriminatedUnion("type", [
@@ -294,6 +345,9 @@ export const ParentToIframeMessageSchema = z.discriminatedUnion("type", [
   UploadChunkMessageSchema,
   DownloadChunkMessageSchema,
   GetConnectionInfoMessageSchema,
+  IsConnectedMessageSchema,
+  GsocMineMessageSchema,
+  GsocSendMessageSchema,
 ])
 
 export type ParentIdentifyMessage = z.infer<typeof ParentIdentifyMessageSchema>
@@ -309,6 +363,9 @@ export type DownloadChunkMessage = z.infer<typeof DownloadChunkMessageSchema>
 export type GetConnectionInfoMessage = z.infer<
   typeof GetConnectionInfoMessageSchema
 >
+export type IsConnectedMessage = z.infer<typeof IsConnectedMessageSchema>
+export type GsocMineMessage = z.infer<typeof GsocMineMessageSchema>
+export type GsocSendMessage = z.infer<typeof GsocSendMessageSchema>
 export type ParentToIframeMessage = z.infer<typeof ParentToIframeMessageSchema>
 
 // ============================================================================
@@ -415,6 +472,25 @@ export const ConnectResponseMessageSchema = z.object({
   success: z.boolean(),
 })
 
+export const IsConnectedResponseMessageSchema = z.object({
+  type: z.literal("isConnectedResponse"),
+  requestId: z.string(),
+  connected: z.boolean(),
+})
+
+export const GsocMineResponseMessageSchema = z.object({
+  type: z.literal("gsocMineResponse"),
+  requestId: z.string(),
+  signer: z.string(),
+})
+
+export const GsocSendResponseMessageSchema = z.object({
+  type: z.literal("gsocSendResponse"),
+  requestId: z.string(),
+  reference: ReferenceSchema,
+  tagUid: z.number().optional(),
+})
+
 export const IframeToParentMessageSchema = z.discriminatedUnion("type", [
   ProxyReadyMessageSchema,
   InitErrorMessageSchema,
@@ -431,6 +507,9 @@ export const IframeToParentMessageSchema = z.discriminatedUnion("type", [
   ErrorMessageSchema,
   ConnectionInfoResponseMessageSchema,
   ConnectResponseMessageSchema,
+  IsConnectedResponseMessageSchema,
+  GsocMineResponseMessageSchema,
+  GsocSendResponseMessageSchema,
 ])
 
 export type ProxyReadyMessage = z.infer<typeof ProxyReadyMessageSchema>
@@ -467,6 +546,15 @@ export type ConnectionInfoResponseMessage = z.infer<
 >
 export type ConnectResponseMessage = z.infer<
   typeof ConnectResponseMessageSchema
+>
+export type IsConnectedResponseMessage = z.infer<
+  typeof IsConnectedResponseMessageSchema
+>
+export type GsocMineResponseMessage = z.infer<
+  typeof GsocMineResponseMessageSchema
+>
+export type GsocSendResponseMessage = z.infer<
+  typeof GsocSendResponseMessageSchema
 >
 export type IframeToParentMessage = z.infer<typeof IframeToParentMessageSchema>
 
