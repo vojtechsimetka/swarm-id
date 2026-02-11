@@ -14,8 +14,14 @@ import type {
   DownloadChunkMessage,
   GetConnectionInfoMessage,
   IsConnectedMessage,
+  GetNodeInfoMessage,
   GsocMineMessage,
   GsocSendMessage,
+  ActUploadDataMessage,
+  ActDownloadDataMessage,
+  ActAddGranteesMessage,
+  ActRevokeGranteesMessage,
+  ActGetGranteesMessage,
   AppMetadata,
   PostageStamp,
   ConnectedApp,
@@ -29,11 +35,18 @@ import {
   makeContentAddressedChunk,
   BatchId,
   EthAddress,
+  MantarayNode,
+  NULL_ADDRESS,
 } from "@ethersphere/bee-js"
 import { uploadDataWithSigning } from "./proxy/upload-data"
 import { uploadEncryptedDataWithSigning } from "./proxy/upload-encrypted-data"
 import { downloadDataWithChunkAPI } from "./proxy/download-data"
 import type { UploadContext, UploadProgress } from "./proxy/types"
+import {
+  loadMantarayTreeWithChunkAPI,
+  saveMantarayTreeRecursively,
+} from "./proxy/mantaray"
+import { saveMantarayTreeRecursivelyEncrypted } from "./proxy/mantaray-encrypted"
 import { UtilizationAwareStamper } from "./utils/batch-utilization"
 import { UtilizationStoreDB } from "./storage/utilization-store"
 import {
@@ -43,9 +56,20 @@ import {
   createNetworkSettingsStorageManager,
   createAccountsStorageManager,
 } from "./utils/storage-managers"
-import { hexToUint8Array } from "./utils/key-derivation"
+import { hexToUint8Array, uint8ArrayToHex } from "./utils/key-derivation"
 import { DEFAULT_BEE_NODE_URL } from "./schemas"
 import { buildAuthUrl } from "./utils/url"
+import {
+  createActForContent,
+  decryptActReference,
+  addGranteesToAct,
+  revokeGranteesFromAct,
+  getGranteesFromAct,
+  parseCompressedPublicKey,
+} from "./proxy/act"
+
+const DEFAULT_ACT_FILENAME = "index.bin"
+const DEFAULT_ACT_CONTENT_TYPE = "application/octet-stream"
 
 /**
  * Swarm ID Proxy - Runs inside the iframe
@@ -166,6 +190,7 @@ export class SwarmIdProxy {
       if (stamp) {
         this.postageBatchId = stamp.batchID.toHex()
         this.signerKey = stamp.signerKey.toHex()
+        this.stamperDepth = stamp.depth
         await this.initializeStamper()
       } else {
         console.log("[Proxy] No postage stamp found for connected identity")
@@ -535,12 +560,36 @@ export class SwarmIdProxy {
         await this.handleIsConnected(message, event)
         break
 
+      case "getNodeInfo":
+        await this.handleGetNodeInfo(message, event)
+        break
+
       case "gsocMine":
         this.handleGsocMine(message, event)
         break
 
       case "gsocSend":
         await this.handleGsocSend(message, event)
+        break
+
+      case "actUploadData":
+        await this.handleActUploadData(message, event)
+        break
+
+      case "actDownloadData":
+        await this.handleActDownloadData(message, event)
+        break
+
+      case "actAddGrantees":
+        await this.handleActAddGrantees(message, event)
+        break
+
+      case "actRevokeGrantees":
+        await this.handleActRevokeGrantees(message, event)
+        break
+
+      case "actGetGrantees":
+        await this.handleActGetGrantees(message, event)
         break
 
       default:
@@ -684,6 +733,7 @@ export class SwarmIdProxy {
         if (stamp) {
           this.postageBatchId = stamp.batchID.toHex()
           this.signerKey = stamp.signerKey.toHex()
+          this.stamperDepth = stamp.depth
           await this.initializeStamper()
         } else {
           console.log("[Proxy] No postage stamp found for connected identity")
@@ -1067,6 +1117,38 @@ export class SwarmIdProxy {
     console.log("[Proxy] Bee node connected:", connected)
   }
 
+  private async handleGetNodeInfo(
+    message: GetNodeInfoMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    console.log("[Proxy] Getting node info...")
+
+    try {
+      const nodeInfo = await this.bee.getNodeInfo()
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "getNodeInfoResponse",
+            requestId: message.requestId,
+            beeMode: nodeInfo.beeMode,
+            chequebookEnabled: nodeInfo.chequebookEnabled,
+            swapEnabled: nodeInfo.swapEnabled,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log("[Proxy] Node info:", nodeInfo.beeMode)
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        message.requestId,
+        error instanceof Error ? error.message : "Failed to get node info",
+      )
+    }
+  }
+
   private handleDisconnect(
     message: { type: "disconnect"; requestId: string },
     event: MessageEvent,
@@ -1335,6 +1417,7 @@ export class SwarmIdProxy {
       if (stamp) {
         this.postageBatchId = stamp.batchID.toHex()
         this.signerKey = stamp.signerKey.toHex()
+        this.stamperDepth = stamp.depth
       }
     }
 
@@ -1686,8 +1769,15 @@ export class SwarmIdProxy {
       // Sign the chunk to create envelope
       const envelope = this.stamper.stamp(chunkAdapter)
 
+      // Create a tag if not provided (required for dev mode)
+      let tag = options?.tag
+      if (!tag) {
+        const tagResponse = await this.bee.createTag()
+        tag = tagResponse.uid
+      }
+
       // Use non-deferred mode for faster uploads (returns immediately)
-      const uploadOptions = { ...options, deferred: false, pin: false }
+      const uploadOptions = { ...options, tag, deferred: false, pin: false }
 
       // Upload with envelope signature
       const uploadResult = await this.bee.uploadChunk(
@@ -1849,6 +1939,535 @@ export class SwarmIdProxy {
         event,
         requestId,
         error instanceof Error ? error.message : "GSOC send failed",
+      )
+    }
+  }
+
+  // ============================================================================
+  // ACT (Access Control Tries) Handlers
+  // ============================================================================
+
+  private async handleActUploadData(
+    message: ActUploadDataMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const {
+      requestId,
+      data,
+      grantees,
+      options,
+      requestOptions,
+      enableProgress,
+    } = message
+
+    console.log(
+      "[Proxy] ACT upload data request, size:",
+      data ? data.length : 0,
+      "grantees:",
+      grantees.length,
+    )
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      if (!this.signerKey || !this.postageBatchId) {
+        throw new Error(
+          "Signer key and postage batch ID required. Please login first.",
+        )
+      }
+
+      if (!this.stamper) {
+        throw new Error("Stamper not initialized. Please login first.")
+      }
+
+      // Prepare upload context
+      const context: UploadContext = {
+        bee: this.bee,
+        stamper: this.stamper,
+      }
+
+      // Parse grantee public keys from compressed hex
+      const granteePublicKeys = grantees.map((hex) =>
+        parseCompressedPublicKey(hex),
+      )
+
+      // Progress callback (if enabled)
+      const onProgress = enableProgress
+        ? (progress: UploadProgress) => {
+            if (event.source) {
+              ;(event.source as WindowProxy).postMessage(
+                {
+                  type: "uploadProgress",
+                  requestId,
+                  total: progress.total,
+                  processed: progress.processed,
+                } satisfies IframeToParentMessage,
+                { targetOrigin: event.origin },
+              )
+            }
+          }
+        : undefined
+
+      // Use appSecret as publisher private key (user's identity key for this app)
+      const publisherPrivateKey = hexToUint8Array(this.appSecret)
+
+      // Step 1: Upload raw content data - ENCRYPTED (64-byte reference)
+      const contentUpload = await uploadEncryptedDataWithSigning(
+        context,
+        data,
+        undefined, // generate random encryption key
+        options,
+        onProgress,
+        requestOptions,
+      )
+      console.log(
+        `[ACT DEBUG] Encrypted content reference (${contentUpload.reference.length} hex chars): ${contentUpload.reference}`,
+      )
+
+      // Step 2: Create Mantaray manifest wrapping the content
+      // Content reference is now 64 bytes (encrypted reference: address + encryption key)
+      // This is needed because Bee's /bzz/ endpoint expects a default (Mantaray) manifest
+      const manifest = new MantarayNode()
+      const contentReferenceBytes = hexToUint8Array(contentUpload.reference) // 64 bytes
+      manifest.addFork(DEFAULT_ACT_FILENAME, contentReferenceBytes, {
+        "Content-Type": DEFAULT_ACT_CONTENT_TYPE,
+        Filename: DEFAULT_ACT_FILENAME,
+      })
+      manifest.addFork("/", NULL_ADDRESS, {
+        "website-index-document": DEFAULT_ACT_FILENAME,
+      })
+
+      // Create a tag for the manifest uploads (required for dev mode)
+      let manifestTag = options?.tag
+      if (!manifestTag) {
+        const tagResponse = await context.bee.createTag()
+        manifestTag = tagResponse.uid
+      }
+
+      const beeCompatible = options?.beeCompatible === true
+
+      // Step 3: Upload the Mantaray manifest
+      const manifestResult = beeCompatible
+        ? await saveMantarayTreeRecursively(manifest, async (data, isRoot) => {
+            const chunk = makeContentAddressedChunk(data)
+            const envelope = context.stamper.stamp({
+              hash: () => chunk.address.toUint8Array(),
+              build: () => chunk.data,
+              span: 0n,
+              writer: undefined as any,
+            })
+            await context.bee.uploadChunk(
+              envelope,
+              chunk.data,
+              { ...options, tag: manifestTag, deferred: false },
+              requestOptions,
+            )
+            return {
+              reference: chunk.address.toHex(),
+              tagUid: isRoot ? manifestTag : undefined,
+            }
+          })
+        : await saveMantarayTreeRecursivelyEncrypted(
+            manifest,
+            async (encryptedData, address, isRoot) => {
+              const envelope = context.stamper.stamp({
+                hash: () => address,
+                build: () => encryptedData,
+                span: 0n,
+                writer: undefined as any,
+              })
+              await context.bee.uploadChunk(
+                envelope,
+                encryptedData,
+                { ...options, tag: manifestTag, deferred: false },
+                requestOptions,
+              )
+              return {
+                tagUid: isRoot ? manifestTag : undefined,
+              }
+            },
+          )
+
+      console.log(
+        `[ACT DEBUG] ${beeCompatible ? "Bee-compatible" : "Encrypted"} manifest reference (${manifestResult.rootReference.length} hex chars): ${manifestResult.rootReference}`,
+      )
+
+      // Step 4: Use manifest reference for ACT encryption
+      const manifestReferenceBytes = hexToUint8Array(
+        manifestResult.rootReference,
+      )
+      console.log(
+        `[ACT DEBUG] Manifest reference bytes (${manifestReferenceBytes.length} bytes): ${uint8ArrayToHex(manifestReferenceBytes)}`,
+      )
+
+      // Create ACT for the manifest (which points to the content)
+      const actResult = await createActForContent(
+        context,
+        manifestReferenceBytes,
+        publisherPrivateKey,
+        granteePublicKeys,
+        options,
+        requestOptions,
+      )
+
+      console.log(
+        `[ACT DEBUG] Encrypted reference: ${actResult.encryptedReference}`,
+      )
+
+      // Save stamper state after successful upload
+      await this.saveStamperState()
+
+      // Send final response
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "actUploadDataResponse",
+            requestId,
+            encryptedReference: actResult.encryptedReference,
+            historyReference: actResult.historyReference,
+            granteeListReference: actResult.granteeListReference,
+            publisherPubKey: actResult.publisherPubKey,
+            actReference: actResult.actReference,
+            tagUid: contentUpload.tagUid,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log(
+        "[Proxy] ACT upload complete, historyReference:",
+        actResult.historyReference,
+      )
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "ACT upload failed",
+      )
+    }
+  }
+
+  private async handleActDownloadData(
+    message: ActDownloadDataMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const {
+      requestId,
+      encryptedReference,
+      historyReference,
+      publisherPubKey,
+      timestamp,
+      requestOptions,
+    } = message
+
+    console.log(
+      "[Proxy] ACT download data request, historyReference:",
+      historyReference,
+    )
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      // appSecret is already checked by authenticated check above
+      // Use appSecret as reader private key (user's identity key for this app)
+      const readerPrivateKey = hexToUint8Array(this.appSecret)
+
+      // Decrypt the ACT reference to get the content reference
+      const contentReference = await decryptActReference(
+        this.bee,
+        encryptedReference,
+        historyReference,
+        publisherPubKey,
+        readerPrivateKey,
+        timestamp,
+        requestOptions,
+      )
+
+      console.log(
+        "[Proxy] ACT decrypted, manifest reference:",
+        contentReference,
+      )
+
+      // Step 1: Download and unmarshal the Mantaray manifest (chunk API only)
+      const manifest = await loadMantarayTreeWithChunkAPI(
+        this.bee,
+        contentReference,
+        requestOptions,
+      )
+
+      // Step 2: Get the index document path from manifest metadata
+      const { indexDocument } = manifest.getDocsMetadata()
+      if (!indexDocument) {
+        throw new Error("Manifest does not contain an index document reference")
+      }
+
+      // Step 3: Find the node at the index document path
+      const contentNode = manifest.find(indexDocument)
+      if (!contentNode) {
+        throw new Error(`Content node "${indexDocument}" not found in manifest`)
+      }
+
+      if (!contentNode.targetAddress) {
+        throw new Error(
+          `Content node "${indexDocument}" does not have a target address`,
+        )
+      }
+
+      const actualContentRef = uint8ArrayToHex(contentNode.targetAddress)
+      console.log(
+        "[Proxy] Resolved actual content reference:",
+        actualContentRef,
+      )
+
+      // Step 4: Download the actual content
+      const data = await downloadDataWithChunkAPI(
+        this.bee,
+        actualContentRef,
+        undefined,
+        undefined,
+        requestOptions,
+      )
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "actDownloadDataResponse",
+            requestId,
+            data: data as Uint8Array,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log("[Proxy] ACT download complete, data size:", data.length)
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "ACT download failed",
+      )
+    }
+  }
+
+  private async handleActAddGrantees(
+    message: ActAddGranteesMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const { requestId, historyReference, grantees, requestOptions } = message
+
+    console.log(
+      "[Proxy] ACT add grantees request, historyReference:",
+      historyReference,
+      "new grantees:",
+      grantees.length,
+    )
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      if (!this.signerKey || !this.postageBatchId) {
+        throw new Error(
+          "Signer key and postage batch ID required. Please login first.",
+        )
+      }
+
+      if (!this.stamper) {
+        throw new Error("Stamper not initialized. Please login first.")
+      }
+
+      // Prepare upload context
+      const context: UploadContext = {
+        bee: this.bee,
+        stamper: this.stamper,
+      }
+
+      // Use appSecret as publisher private key (user's identity key for this app)
+      const publisherPrivateKey = hexToUint8Array(this.appSecret)
+
+      // Parse grantee public keys from compressed hex
+      const newGranteePublicKeys = grantees.map((hex) =>
+        parseCompressedPublicKey(hex),
+      )
+
+      // Add grantees to ACT
+      const result = await addGranteesToAct(
+        context,
+        historyReference,
+        publisherPrivateKey,
+        newGranteePublicKeys,
+        undefined,
+        requestOptions,
+      )
+
+      // Save stamper state after successful upload
+      await this.saveStamperState()
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "actAddGranteesResponse",
+            requestId,
+            historyReference: result.historyReference,
+            granteeListReference: result.granteeListReference,
+            actReference: result.actReference,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log(
+        "[Proxy] ACT grantees added, new historyReference:",
+        result.historyReference,
+      )
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "ACT add grantees failed",
+      )
+    }
+  }
+
+  private async handleActRevokeGrantees(
+    message: ActRevokeGranteesMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const {
+      requestId,
+      historyReference,
+      encryptedReference,
+      revokeGrantees,
+      requestOptions,
+    } = message
+
+    console.log(
+      "[Proxy] ACT revoke grantees request, historyReference:",
+      historyReference,
+      "revoke grantees:",
+      revokeGrantees.length,
+    )
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      if (!this.signerKey || !this.postageBatchId) {
+        throw new Error(
+          "Signer key and postage batch ID required. Please login first.",
+        )
+      }
+
+      if (!this.stamper) {
+        throw new Error("Stamper not initialized. Please login first.")
+      }
+
+      // Prepare upload context
+      const context: UploadContext = {
+        bee: this.bee,
+        stamper: this.stamper,
+      }
+
+      // Use appSecret as publisher private key (user's identity key for this app)
+      const publisherPrivateKey = hexToUint8Array(this.appSecret)
+
+      // Parse grantee public keys from compressed hex
+      const revokePublicKeys = revokeGrantees.map((hex) =>
+        parseCompressedPublicKey(hex),
+      )
+
+      // Revoke grantees from ACT (performs key rotation)
+      const result = await revokeGranteesFromAct(
+        context,
+        historyReference,
+        encryptedReference,
+        publisherPrivateKey,
+        revokePublicKeys,
+        undefined,
+        requestOptions,
+      )
+
+      // Save stamper state after successful upload
+      await this.saveStamperState()
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "actRevokeGranteesResponse",
+            requestId,
+            encryptedReference: result.encryptedReference,
+            historyReference: result.historyReference,
+            granteeListReference: result.granteeListReference,
+            actReference: result.actReference,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log(
+        "[Proxy] ACT grantees revoked, new historyReference:",
+        result.historyReference,
+      )
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "ACT revoke grantees failed",
+      )
+    }
+  }
+
+  private async handleActGetGrantees(
+    message: ActGetGranteesMessage,
+    event: MessageEvent,
+  ): Promise<void> {
+    const { requestId, historyReference, requestOptions } = message
+
+    console.log(
+      "[Proxy] ACT get grantees request, historyReference:",
+      historyReference,
+    )
+
+    try {
+      if (!this.authenticated || !this.appSecret) {
+        throw new Error("Not authenticated. Please login first.")
+      }
+
+      // appSecret is already checked by authenticated check above
+      // Use appSecret as publisher private key (user's identity key for this app)
+      const publisherPrivateKey = hexToUint8Array(this.appSecret)
+
+      // Get grantees from ACT
+      const grantees = await getGranteesFromAct(
+        this.bee,
+        historyReference,
+        publisherPrivateKey,
+        requestOptions,
+      )
+
+      if (event.source) {
+        ;(event.source as WindowProxy).postMessage(
+          {
+            type: "actGetGranteesResponse",
+            requestId,
+            grantees,
+          } satisfies IframeToParentMessage,
+          { targetOrigin: event.origin },
+        )
+      }
+
+      console.log("[Proxy] ACT grantees retrieved:", grantees.length)
+    } catch (error) {
+      this.sendErrorToParent(
+        event,
+        requestId,
+        error instanceof Error ? error.message : "ACT get grantees failed",
       )
     }
   }

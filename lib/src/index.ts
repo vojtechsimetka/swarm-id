@@ -146,6 +146,7 @@ export type {
   FileData,
   PostageBatch,
   UploadOptions,
+  ActUploadOptions,
   UploadProgress,
   RequestOptions,
   DownloadOptions,
@@ -160,6 +161,17 @@ export type {
   AppMetadata,
   ButtonConfig,
   ConnectionInfo,
+  // ACT message types
+  ActUploadDataMessage,
+  ActDownloadDataMessage,
+  ActAddGranteesMessage,
+  ActRevokeGranteesMessage,
+  ActGetGranteesMessage,
+  ActUploadDataResponseMessage,
+  ActDownloadDataResponseMessage,
+  ActAddGranteesResponseMessage,
+  ActRevokeGranteesResponseMessage,
+  ActGetGranteesResponseMessage,
 } from "./types"
 
 // Entity types from schemas
@@ -212,6 +224,7 @@ export {
   BatchIdSchema,
   AddressSchema,
   UploadOptionsSchema,
+  ActUploadOptionsSchema,
   RequestOptionsSchema,
   DownloadOptionsSchema,
   UploadResultSchema,
@@ -224,7 +237,33 @@ export {
   PopupToIframeMessageSchema,
   SetSecretMessageSchema,
   AuthDataSchema,
+  // ACT message schemas
+  ActUploadDataMessageSchema,
+  ActDownloadDataMessageSchema,
+  ActAddGranteesMessageSchema,
+  ActRevokeGranteesMessageSchema,
+  ActGetGranteesMessageSchema,
+  ActUploadDataResponseMessageSchema,
+  ActDownloadDataResponseMessageSchema,
+  ActAddGranteesResponseMessageSchema,
+  ActRevokeGranteesResponseMessageSchema,
+  ActGetGranteesResponseMessageSchema,
 } from "./types"
+
+// ACT (Access Control Tries) exports
+export {
+  createActForContent,
+  decryptActReference,
+  addGranteesToAct,
+  revokeGranteesFromAct,
+  getGranteesFromAct,
+  parseCompressedPublicKey,
+  publicKeyFromPrivate,
+  compressPublicKey,
+  publicKeyFromCompressed,
+} from "./proxy/act"
+
+export type { ActEntry } from "./proxy/act"
 
 // Constant exports
 export { SWARM_SECRET_PREFIX } from "./types"

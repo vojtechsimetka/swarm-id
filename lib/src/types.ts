@@ -44,15 +44,19 @@ export type PrivateKey = z.infer<typeof PrivateKeySchema>
 // Upload/Download Options
 // ============================================================================
 
-export const UploadOptionsSchema = z
-  .object({
-    pin: z.boolean().optional(),
-    encrypt: z.boolean().optional(),
-    tag: z.number().optional(),
-    deferred: z.boolean().optional(),
-    redundancyLevel: z.number().min(0).max(4).optional(),
-  })
-  .optional()
+const UploadOptionsObjectSchema = z.object({
+  pin: z.boolean().optional(),
+  encrypt: z.boolean().optional(),
+  tag: z.number().optional(),
+  deferred: z.boolean().optional(),
+  redundancyLevel: z.number().min(0).max(4).optional(),
+})
+
+export const UploadOptionsSchema = UploadOptionsObjectSchema.optional()
+
+export const ActUploadOptionsSchema = UploadOptionsObjectSchema.extend({
+  beeCompatible: z.boolean().optional(),
+}).optional()
 
 export const RequestOptionsSchema = z
   .object({
@@ -91,6 +95,9 @@ export interface UploadOptions {
 
 export type RequestOptions = z.infer<typeof RequestOptionsSchema>
 export type DownloadOptions = z.infer<typeof DownloadOptionsSchema>
+export interface ActUploadOptions extends UploadOptions {
+  beeCompatible?: boolean
+}
 
 // ============================================================================
 // Upload/Download Results
@@ -315,6 +322,11 @@ export const IsConnectedMessageSchema = z.object({
   requestId: z.string(),
 })
 
+export const GetNodeInfoMessageSchema = z.object({
+  type: z.literal("getNodeInfo"),
+  requestId: z.string(),
+})
+
 export const GsocMineMessageSchema = z.object({
   type: z.literal("gsocMine"),
   requestId: z.string(),
@@ -333,6 +345,51 @@ export const GsocSendMessageSchema = z.object({
   requestOptions: RequestOptionsSchema,
 })
 
+// ACT (Access Control Tries) Message Schemas
+export const ActUploadDataMessageSchema = z.object({
+  type: z.literal("actUploadData"),
+  requestId: z.string(),
+  data: z.instanceof(Uint8Array),
+  grantees: z.array(z.string()), // Compressed public keys (33 bytes = 66 hex chars)
+  options: ActUploadOptionsSchema,
+  requestOptions: RequestOptionsSchema,
+  enableProgress: z.boolean().optional(),
+})
+
+export const ActDownloadDataMessageSchema = z.object({
+  type: z.literal("actDownloadData"),
+  requestId: z.string(),
+  encryptedReference: ReferenceSchema,
+  historyReference: ReferenceSchema,
+  publisherPubKey: z.string(), // Compressed public key (33 bytes = 66 hex chars)
+  timestamp: z.number().optional(), // Optional: specific ACT version
+  requestOptions: RequestOptionsSchema,
+})
+
+export const ActAddGranteesMessageSchema = z.object({
+  type: z.literal("actAddGrantees"),
+  requestId: z.string(),
+  historyReference: ReferenceSchema,
+  grantees: z.array(z.string()), // Compressed public keys to add
+  requestOptions: RequestOptionsSchema,
+})
+
+export const ActRevokeGranteesMessageSchema = z.object({
+  type: z.literal("actRevokeGrantees"),
+  requestId: z.string(),
+  historyReference: ReferenceSchema,
+  encryptedReference: ReferenceSchema, // Needed for key rotation
+  revokeGrantees: z.array(z.string()), // Compressed public keys to revoke
+  requestOptions: RequestOptionsSchema,
+})
+
+export const ActGetGranteesMessageSchema = z.object({
+  type: z.literal("actGetGrantees"),
+  requestId: z.string(),
+  historyReference: ReferenceSchema,
+  requestOptions: RequestOptionsSchema,
+})
+
 export const ParentToIframeMessageSchema = z.discriminatedUnion("type", [
   ParentIdentifyMessageSchema,
   CheckAuthMessageSchema,
@@ -346,8 +403,14 @@ export const ParentToIframeMessageSchema = z.discriminatedUnion("type", [
   DownloadChunkMessageSchema,
   GetConnectionInfoMessageSchema,
   IsConnectedMessageSchema,
+  GetNodeInfoMessageSchema,
   GsocMineMessageSchema,
   GsocSendMessageSchema,
+  ActUploadDataMessageSchema,
+  ActDownloadDataMessageSchema,
+  ActAddGranteesMessageSchema,
+  ActRevokeGranteesMessageSchema,
+  ActGetGranteesMessageSchema,
 ])
 
 export type ParentIdentifyMessage = z.infer<typeof ParentIdentifyMessageSchema>
@@ -364,8 +427,18 @@ export type GetConnectionInfoMessage = z.infer<
   typeof GetConnectionInfoMessageSchema
 >
 export type IsConnectedMessage = z.infer<typeof IsConnectedMessageSchema>
+export type GetNodeInfoMessage = z.infer<typeof GetNodeInfoMessageSchema>
 export type GsocMineMessage = z.infer<typeof GsocMineMessageSchema>
 export type GsocSendMessage = z.infer<typeof GsocSendMessageSchema>
+export type ActUploadDataMessage = z.infer<typeof ActUploadDataMessageSchema>
+export type ActDownloadDataMessage = z.infer<
+  typeof ActDownloadDataMessageSchema
+>
+export type ActAddGranteesMessage = z.infer<typeof ActAddGranteesMessageSchema>
+export type ActRevokeGranteesMessage = z.infer<
+  typeof ActRevokeGranteesMessageSchema
+>
+export type ActGetGranteesMessage = z.infer<typeof ActGetGranteesMessageSchema>
 export type ParentToIframeMessage = z.infer<typeof ParentToIframeMessageSchema>
 
 // ============================================================================
@@ -478,6 +551,14 @@ export const IsConnectedResponseMessageSchema = z.object({
   connected: z.boolean(),
 })
 
+export const GetNodeInfoResponseMessageSchema = z.object({
+  type: z.literal("getNodeInfoResponse"),
+  requestId: z.string(),
+  beeMode: z.string(),
+  chequebookEnabled: z.boolean(),
+  swapEnabled: z.boolean(),
+})
+
 export const GsocMineResponseMessageSchema = z.object({
   type: z.literal("gsocMineResponse"),
   requestId: z.string(),
@@ -489,6 +570,47 @@ export const GsocSendResponseMessageSchema = z.object({
   requestId: z.string(),
   reference: ReferenceSchema,
   tagUid: z.number().optional(),
+})
+
+// ACT Response Message Schemas
+export const ActUploadDataResponseMessageSchema = z.object({
+  type: z.literal("actUploadDataResponse"),
+  requestId: z.string(),
+  encryptedReference: ReferenceSchema,
+  historyReference: ReferenceSchema,
+  granteeListReference: ReferenceSchema,
+  publisherPubKey: z.string(), // Compressed public key
+  actReference: ReferenceSchema,
+  tagUid: z.number().optional(),
+})
+
+export const ActDownloadDataResponseMessageSchema = z.object({
+  type: z.literal("actDownloadDataResponse"),
+  requestId: z.string(),
+  data: z.instanceof(Uint8Array),
+})
+
+export const ActAddGranteesResponseMessageSchema = z.object({
+  type: z.literal("actAddGranteesResponse"),
+  requestId: z.string(),
+  historyReference: ReferenceSchema,
+  granteeListReference: ReferenceSchema,
+  actReference: ReferenceSchema,
+})
+
+export const ActRevokeGranteesResponseMessageSchema = z.object({
+  type: z.literal("actRevokeGranteesResponse"),
+  requestId: z.string(),
+  encryptedReference: ReferenceSchema,
+  historyReference: ReferenceSchema,
+  granteeListReference: ReferenceSchema,
+  actReference: ReferenceSchema,
+})
+
+export const ActGetGranteesResponseMessageSchema = z.object({
+  type: z.literal("actGetGranteesResponse"),
+  requestId: z.string(),
+  grantees: z.array(z.string()),
 })
 
 export const IframeToParentMessageSchema = z.discriminatedUnion("type", [
@@ -508,8 +630,14 @@ export const IframeToParentMessageSchema = z.discriminatedUnion("type", [
   ConnectionInfoResponseMessageSchema,
   ConnectResponseMessageSchema,
   IsConnectedResponseMessageSchema,
+  GetNodeInfoResponseMessageSchema,
   GsocMineResponseMessageSchema,
   GsocSendResponseMessageSchema,
+  ActUploadDataResponseMessageSchema,
+  ActDownloadDataResponseMessageSchema,
+  ActAddGranteesResponseMessageSchema,
+  ActRevokeGranteesResponseMessageSchema,
+  ActGetGranteesResponseMessageSchema,
 ])
 
 export type ProxyReadyMessage = z.infer<typeof ProxyReadyMessageSchema>
@@ -550,11 +678,29 @@ export type ConnectResponseMessage = z.infer<
 export type IsConnectedResponseMessage = z.infer<
   typeof IsConnectedResponseMessageSchema
 >
+export type GetNodeInfoResponseMessage = z.infer<
+  typeof GetNodeInfoResponseMessageSchema
+>
 export type GsocMineResponseMessage = z.infer<
   typeof GsocMineResponseMessageSchema
 >
 export type GsocSendResponseMessage = z.infer<
   typeof GsocSendResponseMessageSchema
+>
+export type ActUploadDataResponseMessage = z.infer<
+  typeof ActUploadDataResponseMessageSchema
+>
+export type ActDownloadDataResponseMessage = z.infer<
+  typeof ActDownloadDataResponseMessageSchema
+>
+export type ActAddGranteesResponseMessage = z.infer<
+  typeof ActAddGranteesResponseMessageSchema
+>
+export type ActRevokeGranteesResponseMessage = z.infer<
+  typeof ActRevokeGranteesResponseMessageSchema
+>
+export type ActGetGranteesResponseMessage = z.infer<
+  typeof ActGetGranteesResponseMessageSchema
 >
 export type IframeToParentMessage = z.infer<typeof IframeToParentMessageSchema>
 
