@@ -6,6 +6,7 @@
 	import EthereumLogo from '$lib/components/ethereum-logo.svelte'
 	import Typography from '$lib/components/ui/typography.svelte'
 	import Add from 'carbon-icons-svelte/lib/Add.svelte'
+	import Bot from 'carbon-icons-svelte/lib/Bot.svelte'
 	import { accountsStore } from '$lib/stores/accounts.svelte'
 	import { sessionStore } from '$lib/stores/session.svelte'
 	import { EthAddress } from '@ethersphere/bee-js'
@@ -13,6 +14,18 @@
 	import { goto } from '$app/navigation'
 	import { resolve } from '$app/paths'
 	import routes from '$lib/routes'
+	import type { Component } from 'svelte'
+
+	function getAccountIcon(type: string): Component<{ width?: number; height?: number }> {
+		switch (type) {
+			case 'passkey':
+				return PasskeyLogo
+			case 'agent':
+				return Bot
+			default:
+				return EthereumLogo
+		}
+	}
 
 	interface Props {
 		selectedAccount: EthAddress | undefined
@@ -28,7 +41,7 @@
 		accounts.map((account) => ({
 			value: toPrefixedHex(account.id),
 			label: account.name,
-			icon: account.type === 'passkey' ? PasskeyLogo : EthereumLogo,
+			icon: getAccountIcon(account.type),
 		})),
 	)
 

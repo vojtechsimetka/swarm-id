@@ -15,9 +15,10 @@
 
 	interface Props {
 		header?: Snippet
+		showAgentSignup?: boolean
 	}
 
-	let { header }: Props = $props()
+	let { header, showAgentSignup = false }: Props = $props()
 
 	function handlePasskeyClick() {
 		goto(resolve(routes.PASSKEY_NEW))
@@ -101,10 +102,15 @@
 	</Vertical>
 	<div class="footer-text">
 		<!-- eslint-disable svelte/no-navigation-without-resolve -- full URL, not a route -->
-		<Typography variant="small"
-			>Visit <a href={window.location.origin}>{window.location.host}</a> for info about Swarm ID</Typography
-		>
+		<Typography variant="small">
+			Visit <a href={window.location.origin}>{window.location.host}</a> for info about Swarm ID
+		</Typography>
 		<!-- eslint-enable svelte/no-navigation-without-resolve -->
+		{#if showAgentSignup}
+			<Typography variant="small">
+				<a href={resolve(routes.AGENT_NEW)}>Sign up as agent</a>
+			</Typography>
+		{/if}
 	</div>
 </Vertical>
 

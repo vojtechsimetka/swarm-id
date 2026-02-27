@@ -20,8 +20,13 @@
 	import Hashicon from '$lib/components/hashicon.svelte'
 	import { ArrowRight } from 'carbon-icons-svelte'
 	import { sessionStore } from '$lib/stores/session.svelte'
-	import { getMasterKeyFromAccount } from '$lib/utils/account-auth'
+	import {
+		getMasterKeyFromAccount,
+		SeedPhraseRequiredError,
+		getMasterKeyFromAgentAccount,
+	} from '$lib/utils/account-auth'
 	import Confirmation from '$lib/components/confirmation.svelte'
+	import EnterSeedModal from '$lib/components/enter-seed-modal.svelte'
 
 	let selectedIdentity = $state<Identity | undefined>(undefined)
 	let error = $state<string | undefined>(undefined)
@@ -31,6 +36,9 @@
 		selectedAccountId ? accountsStore.getAccount(selectedAccountId) : undefined,
 	)
 	let isAuthenticating = $state(false)
+	let showSeedModal = $state(false)
+	let pendingAgentAccount = $state<Account | undefined>(undefined)
+	let showAgentSignup = $state(false)
 
 	const allIdentities = $derived(identitiesStore.identities)
 	const identities = $derived.by(() => {
@@ -50,6 +58,7 @@
 	onMount(() => {
 		// Get parameters from URL hash (e.g., #origin=foo&appName=bar)
 		const hashParams = getHashParams()
+		showAgentSignup = hashParams.has('agent')
 
 		if (!sessionStore.data.appOrigin) {
 			const appOrigin = hashParams.get('origin')
@@ -133,7 +142,8 @@
 		await handleAuthenticate()
 
 		// If this was an existing identity (not from creation flow), close automatically
-		if (!error && !sessionStore.data.currentIdentityId) {
+		// But don't close if we're waiting for seed phrase input (agent accounts)
+		if (!error && !sessionStore.data.currentIdentityId && !showSeedModal) {
 			closeWindowWithSessionCleanup()
 		}
 	}
@@ -176,9 +186,43 @@
 		try {
 			isAuthenticating = true
 			return await getMasterKeyFromAccount(account)
+		} catch (err) {
+			if (err instanceof SeedPhraseRequiredError) {
+				// Agent accounts need seed phrase - show modal
+				pendingAgentAccount = account
+				showSeedModal = true
+				isAuthenticating = false
+				return undefined
+			}
+			throw err
 		} finally {
-			isAuthenticating = false
+			if (!showSeedModal) {
+				isAuthenticating = false
+			}
 		}
+	}
+
+	async function handleSeedPhraseProvided(seedPhrase: string) {
+		if (!pendingAgentAccount) return
+
+		try {
+			const masterKey = getMasterKeyFromAgentAccount(pendingAgentAccount, seedPhrase)
+			sessionStore.setTemporaryMasterKey(masterKey)
+			pendingAgentAccount = undefined
+
+			// Re-trigger the authentication flow
+			if (selectedIdentity) {
+				await handleAuthenticate()
+			}
+		} catch (err) {
+			error = err instanceof Error ? err.message : 'Invalid seed phrase'
+			pendingAgentAccount = undefined
+		}
+	}
+
+	function handleSeedModalCancel() {
+		pendingAgentAccount = undefined
+		isAuthenticating = false
 	}
 
 	async function handleAuthenticate() {
@@ -201,6 +245,11 @@
 		try {
 			// Retrieve masterKey based on account type
 			const masterKey = await tryGetMasterKeyFromAccount(account)
+
+			// If masterKey is undefined, we're waiting for seed phrase input
+			if (!masterKey) {
+				return
+			}
 
 			// Hierarchical key derivation: Account → Identity → App
 			// Step 1: Derive identity-specific master key
@@ -276,6 +325,12 @@
 		</Vertical>
 	{:else}
 		<!-- No accounts, show create form -->
-		<CreateNewAccount header={connectedAppHeader} />
+		<CreateNewAccount header={connectedAppHeader} {showAgentSignup} />
 	{/if}
 {/if}
+
+<EnterSeedModal
+	bind:open={showSeedModal}
+	onUnlock={handleSeedPhraseProvided}
+	onCancel={handleSeedModalCancel}
+/>
