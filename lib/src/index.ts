@@ -14,6 +14,7 @@ export { SwarmIdProxy, initProxy } from "./swarm-id-proxy"
 // Key derivation utilities
 export {
   deriveSecret,
+  deriveIdentityKey,
   generateMasterKey,
   hexToUint8Array,
   uint8ArrayToHex,
@@ -92,6 +93,42 @@ export {
 // Storage manager types
 export type { NetworkSettingsStorageManager } from "./utils/storage-managers"
 
+// Account state snapshot (shared by file export and Swarm sync)
+export {
+  serializeAccountStateSnapshot,
+  deserializeAccountStateSnapshot,
+  AccountStateSnapshotSchemaV1,
+} from "./utils/account-state-snapshot"
+
+export type {
+  AccountStateSnapshot,
+  AccountStateSnapshotResult,
+} from "./utils/account-state-snapshot"
+
+// Encrypted backup (.swarmid) support
+export {
+  deriveBackupEncryptionKey,
+  encryptBackupPayload,
+  decryptBackupPayload,
+  buildBackupHeader,
+  createEncryptedExport,
+  decryptEncryptedExport,
+  parseEncryptedExportHeader,
+  PasskeyBackupHeaderSchemaV1,
+  EthereumBackupHeaderSchemaV1,
+  AgentBackupHeaderSchemaV1,
+  EncryptedSwarmIdExportSchemaV1,
+} from "./utils/backup-encryption"
+
+export type {
+  PasskeyBackupHeader,
+  EthereumBackupHeader,
+  AgentBackupHeader,
+  EncryptedSwarmIdExport,
+  BackupHeaderWithoutCiphertext,
+  ParseHeaderResult,
+} from "./utils/backup-encryption"
+
 // Epoch-based feeds - implementations
 export {
   EpochIndex,
@@ -118,12 +155,12 @@ export {
   // Sync account
   createSyncAccount,
   ACCOUNT_SYNC_TOPIC_PREFIX,
+  // Restore account from Swarm
+  restoreAccountFromSwarm,
 } from "./sync"
 
 // State sync types
 export type {
-  AccountStateSnapshot,
-  AccountMetadata,
   SyncResult,
   // Sync account types
   SyncAccountOptions,
@@ -135,6 +172,8 @@ export type {
   PostageStampsStoreInterface,
   StamperOptions,
   FlushableStamper,
+  // Restore account types
+  RestoreAccountResult,
 } from "./sync"
 
 // Type exports
@@ -231,6 +270,7 @@ export type {
   Identity,
   ConnectedApp,
   PostageStamp,
+  AccountMetadata,
   NetworkSettings,
 } from "./schemas"
 
@@ -298,6 +338,9 @@ export {
   ActRevokeGranteesResponseMessageSchema,
   ActGetGranteesResponseMessageSchema,
 } from "./types"
+
+// Download data utility
+export { downloadDataWithChunkAPI } from "./proxy/download-data"
 
 // ACT (Access Control Tries) exports
 export {

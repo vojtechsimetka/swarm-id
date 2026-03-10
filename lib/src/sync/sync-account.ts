@@ -32,7 +32,8 @@ import type {
 import { BasicEpochUpdater } from "../proxy/feeds/epochs"
 import { uploadEncryptedDataWithSigning } from "../proxy/upload-encrypted-data"
 import { serializeAccountState } from "./serialization"
-import type { SyncResult, AccountStateSnapshot } from "./types"
+import type { SyncResult } from "./types"
+import type { AccountStateSnapshot } from "../utils/account-state-snapshot"
 import type { PostageStamp } from "../schemas"
 
 // Timeout for utilization upload in milliseconds
@@ -304,6 +305,7 @@ export function createSyncAccount(
       timestamp: Date.now(),
       accountId,
       metadata: {
+        accountName: account.name,
         defaultPostageStampBatchID: defaultStampBatchID.toHex(),
         createdAt: account.createdAt,
         lastModified: Date.now(),

@@ -10,22 +10,27 @@
 	import IdentityList from '$lib/components/identity-list.svelte'
 	import CreateIdentityButton from '$lib/components/create-identity-button.svelte'
 	import { notImplemented } from '$lib/utils/not-implemented'
-	import {
-		Add,
-		Checkmark,
-		ChevronLeft,
-		ChevronRight,
-		CloseLarge,
-		IbmCloudHyperProtectCryptoServices,
-		Information,
-		Rocket,
-		TrashCan,
-	} from 'carbon-icons-svelte'
+	import Add from 'carbon-icons-svelte/lib/Add.svelte'
+	import Checkmark from 'carbon-icons-svelte/lib/Checkmark.svelte'
+	import ChevronLeft from 'carbon-icons-svelte/lib/ChevronLeft.svelte'
+	import ChevronRight from 'carbon-icons-svelte/lib/ChevronRight.svelte'
+	import CloseLarge from 'carbon-icons-svelte/lib/CloseLarge.svelte'
+	import Export from 'carbon-icons-svelte/lib/Export.svelte'
+	import IbmCloudHyperProtectCryptoServices from 'carbon-icons-svelte/lib/IbmCloudHyperProtectCryptoServices.svelte'
+	import Information from 'carbon-icons-svelte/lib/Information.svelte'
+	import Rocket from 'carbon-icons-svelte/lib/Rocket.svelte'
+	import TrashCan from 'carbon-icons-svelte/lib/TrashCan.svelte'
+	import Unlink from 'carbon-icons-svelte/lib/Unlink.svelte'
 	import NetworkSettingsModal from './network-settings-modal.svelte'
 	import ThemeToggle from './theme-toggle.svelte'
 	import FlexItem from '$lib/components/ui/flex-item.svelte'
 	import Divider from '$lib/components/ui/divider.svelte'
 	import Badge from '$lib/components/ui/badge.svelte'
+	import { identitiesStore } from '$lib/stores/identities.svelte'
+	import { sessionStore } from '$lib/stores/session.svelte'
+	import { createEncryptedExport } from '@swarm-id/lib'
+	import { connectedAppsStore } from '$lib/stores/connected-apps.svelte'
+	import { postageStampsStore } from '$lib/stores/postage-stamps.svelte'
 	import type { Account, Identity } from '$lib/types'
 	import EthereumLogo from './ethereum-logo.svelte'
 	import PasskeyLogo from './passkey-logo.svelte'
@@ -34,6 +39,7 @@
 	import CopyButton from './copy-button.svelte'
 	import Tooltip from './ui/tooltip.svelte'
 	import ViewGenerationDetailsModal from './view-generation-details-modal.svelte'
+	import DeleteModal from './delete-modal.svelte'
 	import Bot from 'carbon-icons-svelte/lib/Bot.svelte'
 
 	type Props = {
@@ -49,8 +55,10 @@
 	// eslint-disable-next-line svelte/prefer-writable-derived
 	let accountName = $state('')
 	let showUpgradeTooltip = $state(false)
+	let showExportTooltip = $state(false)
 	let networkSettingsModalOpen = $state(false)
 	let showGenerationDetailsModal = $state(false)
+	let showDeleteModal = $state(false)
 
 	$effect(() => {
 		accountName = account.name
@@ -81,6 +89,70 @@
 	function onAccountNameChange() {
 		accountsStore.setAccountName(account.id, accountName)
 	}
+
+	async function handleDeleteAccount() {
+		const accountId = account.id
+		const accountIdentities = identitiesStore.getIdentitiesByAccount(accountId)
+		for (const identity of accountIdentities) {
+			connectedAppsStore.removeAppsByIdentityId(identity.id)
+			identitiesStore.removeIdentity(identity.id)
+		}
+		postageStampsStore.removeStampsByAccount(accountId.toHex())
+		accountsStore.removeAccount(accountId)
+		sessionStore.clearAccount()
+		drawerOpen = false
+		await goto(resolve(routes.HOME))
+	}
+
+	let showPasskeyExportWarning = $state(false)
+
+	async function handleExportAccount() {
+		let url: string | undefined
+		try {
+			const accountIdentities = identitiesStore.getIdentitiesByAccount(account.id)
+			const connectedApps = accountIdentities.flatMap((identity) =>
+				connectedAppsStore.getAppsByIdentityId(identity.id),
+			)
+			const postageStamps = postageStampsStore.getStampsByAccount(account.id.toHex())
+			const encrypted = await createEncryptedExport(
+				account,
+				accountIdentities,
+				connectedApps,
+				postageStamps,
+				account.swarmEncryptionKey,
+			)
+			const json = JSON.stringify(encrypted, undefined, 2)
+			const blob = new Blob([json], { type: 'application/json' })
+			url = URL.createObjectURL(blob)
+			const now = new Date()
+			const date = [
+				now.getFullYear(),
+				String(now.getMonth() + 1).padStart(2, '0'),
+				String(now.getDate()).padStart(2, '0'),
+			].join('-')
+			const time = [
+				String(now.getHours()).padStart(2, '0'),
+				String(now.getMinutes()).padStart(2, '0'),
+				String(now.getSeconds()).padStart(2, '0'),
+			].join('')
+			const a = document.createElement('a')
+			a.href = url
+			a.download = `${account.name}_${date}-${time}.swarmid`
+			document.body.appendChild(a)
+			a.click()
+			document.body.removeChild(a)
+
+			if (account.type === 'passkey') {
+				showPasskeyExportWarning = true
+			}
+		} catch (err) {
+			console.error('Export account failed:', err)
+		} finally {
+			if (url) {
+				URL.revokeObjectURL(url)
+			}
+		}
+	}
 </script>
 
 {#if drawerOpen}
@@ -99,7 +171,7 @@
 							: account.type === 'agent'
 								? 'Agent'
 								: 'Passkey'}
-						<Badge>Local</Badge>
+						<Badge>{account.defaultPostageStampBatchID ? 'Synced' : 'Local'}</Badge>
 					</Horizontal>
 					<Button variant="ghost" dimension="compact" onclick={() => (drawerOpen = false)}
 						><CloseLarge size={20} /></Button
@@ -316,11 +388,13 @@
 					<Input
 						variant="outline"
 						dimension="compact"
-						value="Local"
+						value={account.defaultPostageStampBatchID ? 'Synced' : 'Local'}
 						class="grower"
 						label="Account type"
 						disabled
-						helperText="Limited to viewing only. Upgrade to synced account to upload content and sync across devices."
+						helperText={account.defaultPostageStampBatchID
+							? 'Account is synced and can upload content.'
+							: 'Limited to viewing only. Upgrade to synced account to upload content and sync across devices.'}
 					/>
 				</Vertical>
 
@@ -380,7 +454,64 @@
 							{/snippet}
 						</Tooltip>
 					</Horizontal>
-					<Button variant="ghost" dimension="compact" danger leftAlign onclick={notImplemented}>
+					<Horizontal
+						--horizontal-gap="var(--half-padding)"
+						--horizontal-align-items="stretch"
+						--horizontal-justify-content="stretch"
+						class="grower"
+					>
+						<Button
+							variant="ghost"
+							dimension="compact"
+							onclick={handleExportAccount}
+							flexGrow
+							leftAlign
+						>
+							<Export size={20} />
+							Export account
+							<FlexItem />
+						</Button>
+						<Tooltip
+							show={showExportTooltip}
+							position="top"
+							variant="small"
+							color="dark"
+							maxWidth="279px"
+						>
+							<Button
+								variant="ghost"
+								dimension="small"
+								onmouseenter={() => (showExportTooltip = true)}
+								onmouseleave={() => (showExportTooltip = false)}
+								onclick={(e: MouseEvent) => {
+									e.stopPropagation()
+									showExportTooltip = !showExportTooltip
+								}}
+							>
+								<Information size={16} />
+							</Button>
+							{#snippet helperText()}
+								{#if showPasskeyExportWarning}
+									Backup exported. Note: passkey-encrypted backups can only be imported on devices
+									where this passkey is available (synced via iCloud/Google, or the same hardware
+									key).
+								{:else}
+									Save an encrypted backup of your Swarm ID account as a .swarmid file
+								{/if}
+							{/snippet}
+						</Tooltip>
+					</Horizontal>
+					<Button variant="ghost" dimension="compact" leftAlign onclick={notImplemented}>
+						<Unlink size={20} />
+						Disconnect
+					</Button>
+					<Button
+						variant="ghost"
+						dimension="compact"
+						danger
+						leftAlign
+						onclick={() => (showDeleteModal = true)}
+					>
 						<TrashCan size={20} />
 						Delete account
 					</Button>
@@ -399,6 +530,15 @@
 {/if}
 
 <NetworkSettingsModal bind:open={networkSettingsModalOpen} />
+
+<DeleteModal
+	bind:open={showDeleteModal}
+	title="Delete account?"
+	text="This will permanently delete your account and all associated data. This action cannot be undone."
+	buttonTitle="Delete account"
+	confirm={handleDeleteAccount}
+	oncancel={() => (showDeleteModal = false)}
+/>
 
 <style>
 	.drawer {

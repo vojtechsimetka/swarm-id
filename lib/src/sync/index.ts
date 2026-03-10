@@ -4,12 +4,16 @@ export {
   deriveAccountBackupKey,
   deriveAccountSwarmEncryptionKey,
   backupKeyToPrivateKey,
-} from "./key-derivation"
+} from "../utils/key-derivation"
 export { serializeAccountState, deserializeAccountState } from "./serialization"
 
 // Sync account
 export { createSyncAccount, ACCOUNT_SYNC_TOPIC_PREFIX } from "./sync-account"
 export type { SyncAccountOptions, SyncAccountFunction } from "./sync-account"
+
+// Restore account from Swarm
+export { restoreAccountFromSwarm } from "./restore-account"
+export type { RestoreAccountResult } from "./restore-account"
 
 // Store interfaces
 export type {
@@ -21,4 +25,4 @@ export type {
   FlushableStamper,
 } from "./store-interfaces"
 
-export type { AccountStateSnapshot, AccountMetadata, SyncResult } from "./types"
+export type { SyncResult } from "./types"

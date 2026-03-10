@@ -176,19 +176,22 @@ export const PostageStampSchemaV1 = z.object({
  * Account Metadata Schema V1
  */
 export const AccountMetadataSchemaV1 = z.object({
+  accountName: z.string(),
   defaultPostageStampBatchID: z.string().length(64).optional(), // BatchId hex string
   createdAt: z.number(),
   lastModified: z.number(),
 })
 
+const ACCOUNT_STATE_SNAPSHOT_VERSION = 1
+
 /**
- * Account State Snapshot Schema V1
- * Replaces identity-level sync with account-level sync
+ * Unified account state snapshot schema used by both file export and Swarm sync.
+ * Contains minimal metadata instead of the full Account object.
  */
 export const AccountStateSnapshotSchemaV1 = z.object({
-  version: z.literal(1),
+  version: z.literal(ACCOUNT_STATE_SNAPSHOT_VERSION),
   timestamp: z.number(),
-  accountId: z.string().length(40), // EthAddress hex string
+  accountId: z.string().length(40),
   metadata: AccountMetadataSchemaV1,
   identities: z.array(IdentitySchemaV1),
   connectedApps: z.array(ConnectedAppSchemaV1),
