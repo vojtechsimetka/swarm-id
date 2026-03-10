@@ -88,6 +88,7 @@ export {
   serializeConnectedApp,
   serializePostageStamp,
   serializeNetworkSettings,
+  disconnectApp,
 } from "./utils/storage-managers"
 
 // Storage manager types
