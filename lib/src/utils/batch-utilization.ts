@@ -1329,4 +1329,56 @@ export class UtilizationAwareStamper implements Stamper {
   getUtilizationState(): BatchUtilizationState {
     return this.utilizationState
   }
+
+  /**
+   * Apply utilization update from another tab.
+   * Updates local bucket counters to match leader's state.
+   *
+   * @param buckets Array of bucket indices and their new counter values
+   */
+  applyUtilizationUpdate(
+    buckets: Array<{ index: number; value: number }>,
+  ): void {
+    for (const { index, value } of buckets) {
+      if (index >= 0 && index < NUM_BUCKETS) {
+        // Only update if the incoming value is higher (monotonic increase)
+        if (value > this.utilizationState.dataCounters[index]) {
+          this.utilizationState.dataCounters[index] = value
+        }
+      }
+    }
+
+    // Update stamper bucket state to match
+    const bucketState = utilizationToBucketState(
+      this.utilizationState.dataCounters,
+    )
+    this.stamper = Stamper.fromState(
+      this.stamper.signer,
+      this.batchId,
+      bucketState,
+      this.depth,
+    )
+
+    // Note: Do NOT clear dirtyBuckets here - those represent local writes
+    // that still need to be flushed. Only flush() should clear them.
+
+    console.log(
+      `[UtilizationAwareStamper] Applied update for ${buckets.length} buckets`,
+    )
+  }
+
+  /**
+   * Get bucket counter values for broadcasting to other tabs.
+   * Returns only the dirty buckets with their current values.
+   *
+   * IMPORTANT: Call this BEFORE flush() as flush() clears dirtyBuckets.
+   *
+   * @returns Array of bucket index/value pairs for broadcasting
+   */
+  getBucketUpdatesForBroadcast(): Array<{ index: number; value: number }> {
+    return Array.from(this.dirtyBuckets).map((index) => ({
+      index,
+      value: this.utilizationState.dataCounters[index],
+    }))
+  }
 }

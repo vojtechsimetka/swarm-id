@@ -92,7 +92,7 @@ import {
 import { createAsyncSequentialFinder } from "./proxy/feeds/sequence"
 import { Binary } from "cafe-utility"
 import { calculateTTLSeconds, fetchSwarmPrice } from "./utils/ttl"
-import { DEFAULT_BEE_NODE_URL } from "./schemas"
+import { DEFAULT_BEE_NODE_URL, UtilizationUpdateMessageSchema } from "./schemas"
 import { buildAuthUrl } from "./utils/url"
 import {
   createActForContent,
@@ -138,6 +138,7 @@ export class SwarmIdProxy {
   private unsubscribeConnectedApps: (() => void) | undefined
   private isConnecting: boolean = false
   private parentWindow: WindowProxy | undefined
+  private utilizationChannel: BroadcastChannel
 
   constructor() {
     // Load Bee API URL from network settings, falling back to default
@@ -146,6 +147,11 @@ export class SwarmIdProxy {
     this.bee = new Bee(this.beeApiUrl)
     this.setupMessageListener()
     this.setupConnectedAppsListener()
+
+    // Initialize multi-tab coordination via BroadcastChannel
+    this.utilizationChannel = new BroadcastChannel("swarm-id-utilization")
+    this.setupUtilizationListener()
+
     console.log(
       "[Proxy] Proxy initialized with Bee API from network settings:",
       this.beeApiUrl,
@@ -257,6 +263,54 @@ export class SwarmIdProxy {
       this.unsubscribeConnectedApps = undefined
       console.log("[Proxy] Unsubscribed from connected apps storage changes")
     }
+
+    // Clean up utilization channel
+    this.utilizationChannel.close()
+    console.log("[Proxy] Closed utilization channel")
+  }
+
+  /**
+   * Setup listener for utilization updates from other tabs.
+   * When another tab completes a write, it broadcasts an update.
+   * This tab applies the delta update directly from the message.
+   */
+  private setupUtilizationListener(): void {
+    this.utilizationChannel.onmessage = (event) => {
+      try {
+        const result = UtilizationUpdateMessageSchema.safeParse(event.data)
+        if (
+          result.success &&
+          result.data.batchId === this.postageBatchId &&
+          this.stamper
+        ) {
+          // Apply delta update directly - no IndexedDB read needed
+          this.stamper.applyUtilizationUpdate(result.data.buckets)
+        }
+      } catch (error) {
+        console.error("[Proxy] Failed to apply utilization update:", error)
+      }
+    }
+  }
+
+  /**
+   * Execute a write operation with an exclusive lock across all tabs.
+   * Uses Web Locks API to ensure only one write happens at a time.
+   * Lock is scoped to the batch ID to allow different batches to write concurrently.
+   */
+  private async withWriteLock<T>(operation: () => Promise<T>): Promise<T> {
+    const lockName = `swarm-write-${this.postageBatchId}`
+    return navigator.locks.request(
+      lockName,
+      { mode: "exclusive" },
+      async () => {
+        console.log("[Proxy] Acquired write lock")
+        try {
+          return await operation()
+        } finally {
+          console.log("[Proxy] Released write lock")
+        }
+      },
+    )
   }
 
   /**
@@ -343,7 +397,19 @@ export class SwarmIdProxy {
     }
 
     try {
+      // Capture bucket updates BEFORE flush clears dirtyBuckets
+      const buckets = this.stamper.getBucketUpdatesForBroadcast()
+
       await this.stamper.flush()
+
+      // Broadcast utilization update to other tabs with pre-captured buckets
+      if (this.postageBatchId && buckets.length > 0) {
+        this.utilizationChannel.postMessage({
+          type: "utilization-updated",
+          batchId: this.postageBatchId,
+          buckets,
+        })
+      }
     } catch (error) {
       console.error("[Proxy] Failed to save stamper state:", error)
     }
@@ -1342,11 +1408,6 @@ export class SwarmIdProxy {
       if (!this.stamper) {
         throw new Error("Stamper not initialized. Please login first.")
       }
-      // Prepare upload context
-      const context: UploadContext = {
-        bee: this.bee,
-        stamper: this.stamper,
-      }
 
       // Progress callback (if enabled)
       const onProgress = enableProgress
@@ -1365,33 +1426,44 @@ export class SwarmIdProxy {
           }
         : undefined
 
-      // Client-side chunking and signing
-      let uploadResult
-      if (options?.encrypt) {
-        console.log(
-          "[Proxy] Using client-side signing with encryption for uploadData",
-        )
-        uploadResult = await uploadEncryptedDataWithSigning(
-          context,
-          data,
-          undefined, // encryption key (auto-generated)
-          options,
-          onProgress,
-          requestOptions,
-        )
-      } else {
-        console.log("[Proxy] Using client-side signing for uploadData")
-        uploadResult = await uploadDataWithSigning(
-          context,
-          data,
-          options,
-          onProgress,
-          requestOptions,
-        )
-      }
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const uploadResult = await this.withWriteLock(async () => {
+        // Prepare upload context
+        const context: UploadContext = {
+          bee: this.bee,
+          stamper: this.stamper!,
+        }
 
-      // Save stamper state after successful upload
-      await this.saveStamperState()
+        // Client-side chunking and signing
+        let result
+        if (options?.encrypt) {
+          console.log(
+            "[Proxy] Using client-side signing with encryption for uploadData",
+          )
+          result = await uploadEncryptedDataWithSigning(
+            context,
+            data,
+            undefined, // encryption key (auto-generated)
+            options,
+            onProgress,
+            requestOptions,
+          )
+        } else {
+          console.log("[Proxy] Using client-side signing for uploadData")
+          result = await uploadDataWithSigning(
+            context,
+            data,
+            options,
+            onProgress,
+            requestOptions,
+          )
+        }
+
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return result
+      })
 
       // Send final response
       if (event.source) {
@@ -1498,124 +1570,129 @@ export class SwarmIdProxy {
         this.postageBatchId,
       )
 
-      // Prepare upload context
-      const context: UploadContext = {
-        bee: this.bee,
-        stamper: this.stamper,
-      }
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const manifestResult = await this.withWriteLock(async () => {
+        // Prepare upload context
+        const context: UploadContext = {
+          bee: this.bee,
+          stamper: this.stamper!,
+        }
 
-      // Step 1: Upload file data (encrypted by default, unless encrypt=false)
-      const shouldEncryptContent = options?.encrypt !== false
-      let contentUpload: { reference: string; tagUid?: number }
+        // Step 1: Upload file data (encrypted by default, unless encrypt=false)
+        const shouldEncryptContent = options?.encrypt !== false
+        let contentUpload: { reference: string; tagUid?: number }
 
-      if (shouldEncryptContent) {
-        contentUpload = await uploadEncryptedDataWithSigning(
-          context,
-          data,
-          undefined, // generate random encryption key
-          options,
-          undefined, // no progress callback for now
-          requestOptions,
-        )
-        console.log(
-          "[Proxy] Encrypted content uploaded, reference:",
-          contentUpload.reference.substring(0, 32) + "...",
-        )
-      } else {
-        contentUpload = await uploadDataWithSigning(
-          context,
-          data,
-          options,
-          undefined, // no progress callback for now
-          requestOptions,
-        )
-        console.log(
-          "[Proxy] Content uploaded (unencrypted), reference:",
-          contentUpload.reference,
-        )
-      }
+        if (shouldEncryptContent) {
+          contentUpload = await uploadEncryptedDataWithSigning(
+            context,
+            data,
+            undefined, // generate random encryption key
+            options,
+            undefined, // no progress callback for now
+            requestOptions,
+          )
+          console.log(
+            "[Proxy] Encrypted content uploaded, reference:",
+            contentUpload.reference.substring(0, 32) + "...",
+          )
+        } else {
+          contentUpload = await uploadDataWithSigning(
+            context,
+            data,
+            options,
+            undefined, // no progress callback for now
+            requestOptions,
+          )
+          console.log(
+            "[Proxy] Content uploaded (unencrypted), reference:",
+            contentUpload.reference,
+          )
+        }
 
-      // Step 2: Create Mantaray manifest wrapping the content
-      const manifest = new MantarayNode()
-      const contentReferenceBytes = hexToUint8Array(contentUpload.reference)
+        // Step 2: Create Mantaray manifest wrapping the content
+        const manifest = new MantarayNode()
+        const contentReferenceBytes = hexToUint8Array(contentUpload.reference)
 
-      // Add file fork with metadata
-      manifest.addFork(fileName, contentReferenceBytes, {
-        "Content-Type": "application/octet-stream",
-        Filename: fileName,
+        // Add file fork with metadata
+        manifest.addFork(fileName, contentReferenceBytes, {
+          "Content-Type": "application/octet-stream",
+          Filename: fileName,
+        })
+
+        // Add "/" fork with website-index-document pointing to the file
+        manifest.addFork("/", NULL_ADDRESS, {
+          "website-index-document": fileName,
+        })
+
+        // Step 3: Upload manifest (encrypted only if encryptManifest=true)
+        let manifestTag = options?.tag
+        if (!manifestTag) {
+          const tagResponse = await context.bee.createTag()
+          manifestTag = tagResponse.uid
+        }
+
+        const shouldEncryptManifest = options?.encryptManifest === true
+        let result: { rootReference: string; tagUid?: number }
+
+        if (shouldEncryptManifest) {
+          result = await saveMantarayTreeRecursivelyEncrypted(
+            manifest,
+            async (encryptedData, address, isRoot) => {
+              const envelope = context.stamper.stamp({
+                hash: () => address,
+                build: () => encryptedData,
+                span: 0n,
+                writer: undefined as any,
+              })
+              await context.bee.uploadChunk(
+                envelope,
+                encryptedData,
+                { ...options, tag: manifestTag, deferred: false },
+                requestOptions,
+              )
+              return {
+                tagUid: isRoot ? manifestTag : undefined,
+              }
+            },
+          )
+          console.log(
+            "[Proxy] Encrypted manifest uploaded, reference:",
+            result.rootReference.substring(0, 32) + "...",
+          )
+        } else {
+          result = await saveMantarayTreeRecursively(
+            manifest,
+            async (chunkData, isRoot) => {
+              const chunk = makeContentAddressedChunk(chunkData)
+              const envelope = context.stamper.stamp({
+                hash: () => chunk.address.toUint8Array(),
+                build: () => chunk.data,
+                span: chunk.span.toBigInt(),
+                writer: undefined as any,
+              })
+              const uploadResult = await context.bee.uploadChunk(
+                envelope,
+                chunk.data,
+                { ...options, tag: manifestTag, deferred: false },
+                requestOptions,
+              )
+              return {
+                reference: uploadResult.reference.toHex(),
+                tagUid: isRoot ? manifestTag : undefined,
+              }
+            },
+          )
+          console.log(
+            "[Proxy] Manifest uploaded (unencrypted), reference:",
+            result.rootReference,
+          )
+        }
+
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return result
       })
-
-      // Add "/" fork with website-index-document pointing to the file
-      manifest.addFork("/", NULL_ADDRESS, {
-        "website-index-document": fileName,
-      })
-
-      // Step 3: Upload manifest (encrypted only if encryptManifest=true)
-      let manifestTag = options?.tag
-      if (!manifestTag) {
-        const tagResponse = await context.bee.createTag()
-        manifestTag = tagResponse.uid
-      }
-
-      const shouldEncryptManifest = options?.encryptManifest === true
-      let manifestResult: { rootReference: string; tagUid?: number }
-
-      if (shouldEncryptManifest) {
-        manifestResult = await saveMantarayTreeRecursivelyEncrypted(
-          manifest,
-          async (encryptedData, address, isRoot) => {
-            const envelope = context.stamper.stamp({
-              hash: () => address,
-              build: () => encryptedData,
-              span: 0n,
-              writer: undefined as any,
-            })
-            await context.bee.uploadChunk(
-              envelope,
-              encryptedData,
-              { ...options, tag: manifestTag, deferred: false },
-              requestOptions,
-            )
-            return {
-              tagUid: isRoot ? manifestTag : undefined,
-            }
-          },
-        )
-        console.log(
-          "[Proxy] Encrypted manifest uploaded, reference:",
-          manifestResult.rootReference.substring(0, 32) + "...",
-        )
-      } else {
-        manifestResult = await saveMantarayTreeRecursively(
-          manifest,
-          async (data, isRoot) => {
-            const chunk = makeContentAddressedChunk(data)
-            const envelope = context.stamper.stamp({
-              hash: () => chunk.address.toUint8Array(),
-              build: () => chunk.data,
-              span: chunk.span.toBigInt(),
-              writer: undefined as any,
-            })
-            const result = await context.bee.uploadChunk(
-              envelope,
-              chunk.data,
-              { ...options, tag: manifestTag, deferred: false },
-              requestOptions,
-            )
-            return {
-              reference: result.reference.toHex(),
-              tagUid: isRoot ? manifestTag : undefined,
-            }
-          },
-        )
-        console.log(
-          "[Proxy] Manifest uploaded (unencrypted), reference:",
-          manifestResult.rootReference,
-        )
-      }
-
-      // Save stamper state after successful upload
-      await this.saveStamperState()
 
       // Return 128-char encrypted manifest reference (accessible via /bzz/)
       if (event.source) {
@@ -1767,45 +1844,50 @@ export class SwarmIdProxy {
 
       console.log("[Proxy] Signing and uploading chunk with signer key")
 
-      // Create content-addressed chunk
-      const chunk = makeContentAddressedChunk(data)
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const uploadResult = await this.withWriteLock(async () => {
+        // Create content-addressed chunk
+        const chunk = makeContentAddressedChunk(data)
 
-      // Create adapter for cafe-utility Chunk interface
-      const chunkAdapter = {
-        hash: () => chunk.address.toUint8Array(),
-        build: () => chunk.data,
-        span: 0n, // not used by stamper.stamp
-        writer: undefined as any, // not used by stamper.stamp
-      }
+        // Create adapter for cafe-utility Chunk interface
+        const chunkAdapter = {
+          hash: () => chunk.address.toUint8Array(),
+          build: () => chunk.data,
+          span: 0n, // not used by stamper.stamp
+          writer: undefined as any, // not used by stamper.stamp
+        }
 
-      // Sign the chunk to create envelope
-      const envelope = this.stamper.stamp(chunkAdapter)
+        // Sign the chunk to create envelope
+        const envelope = this.stamper!.stamp(chunkAdapter)
 
-      // Create a tag if not provided (required for dev mode)
-      let tag = options?.tag
-      if (!tag) {
-        const tagResponse = await this.bee.createTag()
-        tag = tagResponse.uid
-      }
+        // Create a tag if not provided (required for dev mode)
+        let tag = options?.tag
+        if (!tag) {
+          const tagResponse = await this.bee.createTag()
+          tag = tagResponse.uid
+        }
 
-      // Use non-deferred mode for faster uploads (returns immediately)
-      const uploadOptions = { ...options, tag, deferred: false, pin: false }
+        // Use non-deferred mode for faster uploads (returns immediately)
+        const uploadOptions = { ...options, tag, deferred: false, pin: false }
 
-      // Upload with envelope signature
-      const uploadResult = await this.bee.uploadChunk(
-        envelope,
-        chunk.data,
-        uploadOptions,
-        requestOptions,
-      )
+        // Upload with envelope signature
+        const result = await this.bee.uploadChunk(
+          envelope,
+          chunk.data,
+          uploadOptions,
+          requestOptions,
+        )
 
-      console.log(
-        "[Proxy] Chunk upload successful, reference:",
-        uploadResult.reference.toHex(),
-      )
+        console.log(
+          "[Proxy] Chunk upload successful, reference:",
+          result.reference.toHex(),
+        )
 
-      // Save stamper state after successful upload
-      await this.saveStamperState()
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return result
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -1921,14 +2003,17 @@ export class SwarmIdProxy {
         )
       }
 
-      const result = await this.bee.gsocSend(
-        this.postageBatchId,
-        signer,
-        identifier,
-        data,
-        options,
-        requestOptions,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        return this.bee.gsocSend(
+          this.postageBatchId!,
+          signer,
+          identifier,
+          data,
+          options,
+          requestOptions,
+        )
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -1982,17 +2067,22 @@ export class SwarmIdProxy {
       const signerKeyObj = new PrivateKey(signerKey)
       const id = new Identifier(identifier)
 
-      const result = await uploadEncryptedSOC(
-        this.bee,
-        this.stamper,
-        signerKeyObj,
-        id,
-        data,
-        undefined,
-        options,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        const uploadResult = await uploadEncryptedSOC(
+          this.bee,
+          this.stamper!,
+          signerKeyObj,
+          id,
+          data,
+          undefined,
+          options,
+        )
 
-      await this.saveStamperState()
+        await this.saveStamperState()
+
+        return uploadResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -2041,16 +2131,21 @@ export class SwarmIdProxy {
       const signerKeyObj = new PrivateKey(signerKey)
       const id = new Identifier(identifier)
 
-      const result = await uploadSOC(
-        this.bee,
-        this.stamper,
-        signerKeyObj,
-        id,
-        data,
-        options,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        const uploadResult = await uploadSOC(
+          this.bee,
+          this.stamper!,
+          signerKeyObj,
+          id,
+          data,
+          options,
+        )
 
-      await this.saveStamperState()
+        await this.saveStamperState()
+
+        return uploadResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -2481,36 +2576,41 @@ export class SwarmIdProxy {
         hasHints: !!epochHints,
       })
 
-      const referenceBytes = hexToUint8Array(reference)
-      const updateResult = await updater.update(
-        atValue,
-        referenceBytes,
-        this.stamper,
-        epochEncryptionKey,
-        epochHints,
-      )
-      console.log("[Proxy] Epoch upload complete", {
-        socAddress: uint8ArrayToHex(updateResult.socAddress),
-        epochStart: updateResult.epoch.start.toString(),
-        epochLevel: updateResult.epoch.level,
-      })
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const updateResult = await this.withWriteLock(async () => {
+        const referenceBytes = hexToUint8Array(reference)
+        const result = await updater.update(
+          atValue,
+          referenceBytes,
+          this.stamper!,
+          epochEncryptionKey,
+          epochHints,
+        )
+        console.log("[Proxy] Epoch upload complete", {
+          socAddress: uint8ArrayToHex(result.socAddress),
+          epochStart: result.epoch.start.toString(),
+          epochLevel: result.epoch.level,
+        })
 
-      const readBackFinder = createAsyncEpochFinder({
-        bee: this.bee,
-        topic: topicObj,
-        owner: ownerAddress,
-        encryptionKey: epochEncryptionKey,
-      })
-      // Upload read-back should verify the exact timestamp write and avoid
-      // broad fallback scans over historical leaves on poisoned networks.
-      const readBack = await readBackFinder.findAt(atValue, atValue)
-      console.log("[Proxy] Epoch upload read-back", {
-        at: atValue.toString(),
-        found: !!readBack,
-        length: readBack ? readBack.length : 0,
-      })
+        const readBackFinder = createAsyncEpochFinder({
+          bee: this.bee,
+          topic: topicObj,
+          owner: ownerAddress,
+          encryptionKey: epochEncryptionKey,
+        })
+        // Upload read-back should verify the exact timestamp write and avoid
+        // broad fallback scans over historical leaves on poisoned networks.
+        const readBack = await readBackFinder.findAt(atValue, atValue)
+        console.log("[Proxy] Epoch upload read-back", {
+          at: atValue.toString(),
+          found: !!readBack,
+          length: readBack ? readBack.length : 0,
+        })
 
-      await this.saveStamperState()
+        await this.saveStamperState()
+
+        return result
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3012,22 +3112,27 @@ export class SwarmIdProxy {
         )
       }
 
-      const identifierBytes = this.makeSequentialFeedIdentifier(
-        topicBytes,
-        resolvedIndex,
-      )
-      const identifier = new Identifier(identifierBytes)
-      const result = await uploadEncryptedSOC(
-        this.bee,
-        this.stamper,
-        signerKeyObj,
-        identifier,
-        payload,
-        undefined,
-        options,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        const identifierBytes = this.makeSequentialFeedIdentifier(
+          topicBytes,
+          resolvedIndex,
+        )
+        const identifier = new Identifier(identifierBytes)
+        const uploadResult = await uploadEncryptedSOC(
+          this.bee,
+          this.stamper!,
+          signerKeyObj,
+          identifier,
+          payload,
+          undefined,
+          options,
+        )
 
-      await this.saveStamperState()
+        await this.saveStamperState()
+
+        return uploadResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3148,35 +3253,40 @@ export class SwarmIdProxy {
         note: "For /bzz/, wrapped chunk must be 48 bytes (unenc) or 80 bytes (enc)",
       })
 
+      // Serialize write through Web Locks API to prevent concurrent uploads
       // Upload SOC - use encryption if key provided, otherwise use /soc endpoint
       // The /soc endpoint is needed for non-encrypted uploads because:
       // - Small SOCs (< 4104 bytes) are misidentified as CAC by /chunks endpoint
       // - /soc endpoint explicitly handles SOC without size-based detection
       // - Preserves v1 format (48-byte CAC) required for /bzz/ compatibility
-      let result
-      if (encryptionKey) {
-        result = await uploadEncryptedSOC(
-          this.bee,
-          this.stamper,
-          signerKeyObj,
-          identifier,
-          payload,
-          hexToUint8Array(encryptionKey),
-          options,
-        )
-      } else {
-        // Use /soc endpoint for non-encrypted uploads (v1 format for /bzz/ compat)
-        result = await uploadSOCViaSocEndpoint(
-          this.bee,
-          this.stamper,
-          signerKeyObj,
-          identifier,
-          payload,
-          options,
-        )
-      }
+      const result = await this.withWriteLock(async () => {
+        let uploadResult
+        if (encryptionKey) {
+          uploadResult = await uploadEncryptedSOC(
+            this.bee,
+            this.stamper!,
+            signerKeyObj,
+            identifier,
+            payload,
+            hexToUint8Array(encryptionKey),
+            options,
+          )
+        } else {
+          // Use /soc endpoint for non-encrypted uploads (v1 format for /bzz/ compat)
+          uploadResult = await uploadSOCViaSocEndpoint(
+            this.bee,
+            this.stamper!,
+            signerKeyObj,
+            identifier,
+            payload,
+            options,
+          )
+        }
 
-      await this.saveStamperState()
+        await this.saveStamperState()
+
+        return uploadResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3270,26 +3380,34 @@ export class SwarmIdProxy {
         )
       }
 
-      const identifierBytes = this.makeSequentialFeedIdentifier(
-        topicBytes,
-        resolvedIndex,
-      )
-      const identifier = new Identifier(identifierBytes)
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const { result, encryptionKeyResult } = await this.withWriteLock(
+        async () => {
+          const identifierBytes = this.makeSequentialFeedIdentifier(
+            topicBytes,
+            resolvedIndex,
+          )
+          const identifier = new Identifier(identifierBytes)
 
-      // uploadReference always uses encryption
-      const encResult = await uploadEncryptedSOC(
-        this.bee,
-        this.stamper,
-        signerKeyObj,
-        identifier,
-        payload,
-        undefined,
-        options,
-      )
-      const result = encResult
-      const encryptionKeyResult = uint8ArrayToHex(encResult.encryptionKey)
+          // uploadReference always uses encryption
+          const encResult = await uploadEncryptedSOC(
+            this.bee,
+            this.stamper!,
+            signerKeyObj,
+            identifier,
+            payload,
+            undefined,
+            options,
+          )
 
-      await this.saveStamperState()
+          await this.saveStamperState()
+
+          return {
+            result: encResult,
+            encryptionKeyResult: uint8ArrayToHex(encResult.encryptionKey),
+          }
+        },
+      )
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3388,111 +3506,126 @@ export class SwarmIdProxy {
       // Use appSecret as publisher private key (user's identity key for this app)
       const publisherPrivateKey = hexToUint8Array(this.appSecret)
 
-      // Step 1: Upload raw content data - ENCRYPTED (64-byte reference)
-      const contentUpload = await uploadEncryptedDataWithSigning(
-        context,
-        data,
-        undefined, // generate random encryption key
-        options,
-        onProgress,
-        requestOptions,
-      )
-      console.log(
-        `[ACT DEBUG] Encrypted content reference (${contentUpload.reference.length} hex chars): ${contentUpload.reference}`,
-      )
-
-      // Step 2: Create Mantaray manifest wrapping the content
-      // Content reference is now 64 bytes (encrypted reference: address + encryption key)
-      // This is needed because Bee's /bzz/ endpoint expects a default (Mantaray) manifest
-      const manifest = new MantarayNode()
-      const contentReferenceBytes = hexToUint8Array(contentUpload.reference) // 64 bytes
-      manifest.addFork(DEFAULT_ACT_FILENAME, contentReferenceBytes, {
-        "Content-Type": DEFAULT_ACT_CONTENT_TYPE,
-        Filename: DEFAULT_ACT_FILENAME,
-      })
-      manifest.addFork("/", NULL_ADDRESS, {
-        "website-index-document": DEFAULT_ACT_FILENAME,
-      })
-
-      // Create a tag for the manifest uploads (required for dev mode)
-      let manifestTag = options?.tag
-      if (!manifestTag) {
-        const tagResponse = await context.bee.createTag()
-        manifestTag = tagResponse.uid
-      }
-
-      const beeCompatible = options?.beeCompatible === true
-
-      // Step 3: Upload the Mantaray manifest
-      const manifestResult = beeCompatible
-        ? await saveMantarayTreeRecursively(manifest, async (data, isRoot) => {
-            const chunk = makeContentAddressedChunk(data)
-            const envelope = context.stamper.stamp({
-              hash: () => chunk.address.toUint8Array(),
-              build: () => chunk.data,
-              span: 0n,
-              writer: undefined as any,
-            })
-            await context.bee.uploadChunk(
-              envelope,
-              chunk.data,
-              { ...options, tag: manifestTag, deferred: false },
-              requestOptions,
-            )
-            return {
-              reference: chunk.address.toHex(),
-              tagUid: isRoot ? manifestTag : undefined,
-            }
-          })
-        : await saveMantarayTreeRecursivelyEncrypted(
-            manifest,
-            async (encryptedData, address, isRoot) => {
-              const envelope = context.stamper.stamp({
-                hash: () => address,
-                build: () => encryptedData,
-                span: 0n,
-                writer: undefined as any,
-              })
-              await context.bee.uploadChunk(
-                envelope,
-                encryptedData,
-                { ...options, tag: manifestTag, deferred: false },
-                requestOptions,
-              )
-              return {
-                tagUid: isRoot ? manifestTag : undefined,
-              }
-            },
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const { actResult, contentUpload } = await this.withWriteLock(
+        async () => {
+          // Step 1: Upload raw content data - ENCRYPTED (64-byte reference)
+          const contentUploadResult = await uploadEncryptedDataWithSigning(
+            context,
+            data,
+            undefined, // generate random encryption key
+            options,
+            onProgress,
+            requestOptions,
+          )
+          console.log(
+            `[ACT DEBUG] Encrypted content reference (${contentUploadResult.reference.length} hex chars): ${contentUploadResult.reference}`,
           )
 
-      console.log(
-        `[ACT DEBUG] ${beeCompatible ? "Bee-compatible" : "Encrypted"} manifest reference (${manifestResult.rootReference.length} hex chars): ${manifestResult.rootReference}`,
-      )
+          // Step 2: Create Mantaray manifest wrapping the content
+          // Content reference is now 64 bytes (encrypted reference: address + encryption key)
+          // This is needed because Bee's /bzz/ endpoint expects a default (Mantaray) manifest
+          const manifest = new MantarayNode()
+          const contentReferenceBytes = hexToUint8Array(
+            contentUploadResult.reference,
+          ) // 64 bytes
+          manifest.addFork(DEFAULT_ACT_FILENAME, contentReferenceBytes, {
+            "Content-Type": DEFAULT_ACT_CONTENT_TYPE,
+            Filename: DEFAULT_ACT_FILENAME,
+          })
+          manifest.addFork("/", NULL_ADDRESS, {
+            "website-index-document": DEFAULT_ACT_FILENAME,
+          })
 
-      // Step 4: Use manifest reference for ACT encryption
-      const manifestReferenceBytes = hexToUint8Array(
-        manifestResult.rootReference,
-      )
-      console.log(
-        `[ACT DEBUG] Manifest reference bytes (${manifestReferenceBytes.length} bytes): ${uint8ArrayToHex(manifestReferenceBytes)}`,
-      )
+          // Create a tag for the manifest uploads (required for dev mode)
+          let manifestTag = options?.tag
+          if (!manifestTag) {
+            const tagResponse = await context.bee.createTag()
+            manifestTag = tagResponse.uid
+          }
 
-      // Create ACT for the manifest (which points to the content)
-      const actResult = await createActForContent(
-        context,
-        manifestReferenceBytes,
-        publisherPrivateKey,
-        granteePublicKeys,
-        options,
-        requestOptions,
-      )
+          const beeCompatible = options?.beeCompatible === true
 
-      console.log(
-        `[ACT DEBUG] Encrypted reference: ${actResult.encryptedReference}`,
-      )
+          // Step 3: Upload the Mantaray manifest
+          const manifestResult = beeCompatible
+            ? await saveMantarayTreeRecursively(
+                manifest,
+                async (chunkData, isRoot) => {
+                  const chunk = makeContentAddressedChunk(chunkData)
+                  const envelope = context.stamper.stamp({
+                    hash: () => chunk.address.toUint8Array(),
+                    build: () => chunk.data,
+                    span: 0n,
+                    writer: undefined as any,
+                  })
+                  await context.bee.uploadChunk(
+                    envelope,
+                    chunk.data,
+                    { ...options, tag: manifestTag, deferred: false },
+                    requestOptions,
+                  )
+                  return {
+                    reference: chunk.address.toHex(),
+                    tagUid: isRoot ? manifestTag : undefined,
+                  }
+                },
+              )
+            : await saveMantarayTreeRecursivelyEncrypted(
+                manifest,
+                async (encryptedData, address, isRoot) => {
+                  const envelope = context.stamper.stamp({
+                    hash: () => address,
+                    build: () => encryptedData,
+                    span: 0n,
+                    writer: undefined as any,
+                  })
+                  await context.bee.uploadChunk(
+                    envelope,
+                    encryptedData,
+                    { ...options, tag: manifestTag, deferred: false },
+                    requestOptions,
+                  )
+                  return {
+                    tagUid: isRoot ? manifestTag : undefined,
+                  }
+                },
+              )
 
-      // Save stamper state after successful upload
-      await this.saveStamperState()
+          console.log(
+            `[ACT DEBUG] ${beeCompatible ? "Bee-compatible" : "Encrypted"} manifest reference (${manifestResult.rootReference.length} hex chars): ${manifestResult.rootReference}`,
+          )
+
+          // Step 4: Use manifest reference for ACT encryption
+          const manifestReferenceBytes = hexToUint8Array(
+            manifestResult.rootReference,
+          )
+          console.log(
+            `[ACT DEBUG] Manifest reference bytes (${manifestReferenceBytes.length} bytes): ${uint8ArrayToHex(manifestReferenceBytes)}`,
+          )
+
+          // Create ACT for the manifest (which points to the content)
+          const actResultValue = await createActForContent(
+            context,
+            manifestReferenceBytes,
+            publisherPrivateKey,
+            granteePublicKeys,
+            options,
+            requestOptions,
+          )
+
+          console.log(
+            `[ACT DEBUG] Encrypted reference: ${actResultValue.encryptedReference}`,
+          )
+
+          // Save stamper state after successful upload
+          await this.saveStamperState()
+
+          return {
+            actResult: actResultValue,
+            contentUpload: contentUploadResult,
+          }
+        },
+      )
 
       // Send final response
       if (event.source) {
@@ -3670,18 +3803,23 @@ export class SwarmIdProxy {
         parseCompressedPublicKey(hex),
       )
 
-      // Add grantees to ACT
-      const result = await addGranteesToAct(
-        context,
-        historyReference,
-        publisherPrivateKey,
-        newGranteePublicKeys,
-        undefined,
-        requestOptions,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        // Add grantees to ACT
+        const addResult = await addGranteesToAct(
+          context,
+          historyReference,
+          publisherPrivateKey,
+          newGranteePublicKeys,
+          undefined,
+          requestOptions,
+        )
 
-      // Save stamper state after successful upload
-      await this.saveStamperState()
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return addResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3757,19 +3895,24 @@ export class SwarmIdProxy {
         parseCompressedPublicKey(hex),
       )
 
-      // Revoke grantees from ACT (performs key rotation)
-      const result = await revokeGranteesFromAct(
-        context,
-        historyReference,
-        encryptedReference,
-        publisherPrivateKey,
-        revokePublicKeys,
-        undefined,
-        requestOptions,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        // Revoke grantees from ACT (performs key rotation)
+        const revokeResult = await revokeGranteesFromAct(
+          context,
+          historyReference,
+          encryptedReference,
+          publisherPrivateKey,
+          revokePublicKeys,
+          undefined,
+          requestOptions,
+        )
 
-      // Save stamper state after successful upload
-      await this.saveStamperState()
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return revokeResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
@@ -3966,20 +4109,28 @@ export class SwarmIdProxy {
         note: "resolvedOwner MUST match the owner used for feed upload",
       })
 
-      // Use createFeedManifestDirect to build and upload the manifest locally
-      // instead of calling bee.createFeedManifest (which uses /feeds endpoint)
-      const result = await createFeedManifestDirect(
-        this.bee,
-        this.stamper,
-        topic,
-        resolvedOwner,
-        {
-          encrypt: uploadOptions?.encrypt !== false, // Default encrypted
-          feedType: feedType, // "Sequence" or "Epoch"
-        },
-        uploadOptions,
-        requestOptions,
-      )
+      // Serialize write through Web Locks API to prevent concurrent uploads
+      const result = await this.withWriteLock(async () => {
+        // Use createFeedManifestDirect to build and upload the manifest locally
+        // instead of calling bee.createFeedManifest (which uses /feeds endpoint)
+        const createResult = await createFeedManifestDirect(
+          this.bee,
+          this.stamper!,
+          topic,
+          resolvedOwner,
+          {
+            encrypt: uploadOptions?.encrypt !== false, // Default encrypted
+            feedType: feedType, // "Sequence" or "Epoch"
+          },
+          uploadOptions,
+          requestOptions,
+        )
+
+        // Save stamper state after successful upload
+        await this.saveStamperState()
+
+        return createResult
+      })
 
       if (event.source) {
         ;(event.source as WindowProxy).postMessage(
