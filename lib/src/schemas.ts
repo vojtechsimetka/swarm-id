@@ -159,7 +159,7 @@ export const PostageStampSchemaV1 = z.object({
   utilization: z.number(),
   usable: z.boolean(),
   depth: z.number(),
-  amount: z.number(),
+  amount: z.string().transform((val) => BigInt(val)),
   bucketDepth: z.number(),
   blockNumber: z.number(),
   immutableFlag: z.boolean(),
