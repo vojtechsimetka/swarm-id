@@ -11,10 +11,16 @@
   import routes from '$lib/routes'
   import { navigateToConnectOrHome } from '$lib/utils/navigation'
   import { accountsStore } from '$lib/stores/accounts.svelte'
+  import { identitiesStore } from '$lib/stores/identities.svelte'
   import { sessionStore } from '$lib/stores/session.svelte'
   import type { PostageStamp } from '@swarm-id/lib'
 
   const account = $derived(sessionStore.data.account)
+  const currentIdentityId = $derived(sessionStore.data.currentIdentityId)
+  const identity = $derived(
+    currentIdentityId ? identitiesStore.getIdentity(currentIdentityId) : undefined,
+  )
+  const appData = $derived(sessionStore.data.appData)
 
   // Bindable state from AddPostageStamp component
   let pageState = $state<PageState>('select')
@@ -62,8 +68,11 @@
         accountId={account.id.toHex()}
         onSuccess={handleSuccess}
         onSkip={handleSkip}
-        skipText="Skip this step"
         introText="Synced accounts require a Swarm postage stamp."
+        variant="account-creation"
+        identityName={identity?.name}
+        identityValue={identity?.id}
+        autoNavigateOnSuccess={!!appData || sessionStore.data.selectedStampOption === 'separate'}
         bind:pageState
         bind:purchaseState
         bind:isFormDisabled
@@ -78,6 +87,8 @@
         {purchaseState}
         {isFormDisabled}
         stampRef={addPostageStampRef}
+        variant="account-creation"
+        onSkip={handleSkip}
       />
     {/if}
   {/snippet}
