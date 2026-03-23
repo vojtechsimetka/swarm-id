@@ -45,8 +45,8 @@ jobs:
 
       - run: pnpm --filter @vojtechsimetka/swarm-id build
 
-      - name: Configure npm registry
-        run: echo "registry=https://registry.npmjs.org/" > ~/.npmrc
+      - name: Upgrade npm for OIDC support
+        run: npm install -g npm@latest
 
       - name: Publish to npm
         working-directory: lib
