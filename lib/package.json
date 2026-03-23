@@ -1,5 +1,5 @@
 {
-  "name": "@swarm-id/lib",
+  "name": "@vojtechsimetka/swarm-id",
   "version": "0.4.0",
   "type": "module",
   "description": "Swarm ID - Identity and key management library for Swarm network dApps",
