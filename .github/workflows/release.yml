@@ -45,6 +45,9 @@ jobs:
 
       - run: pnpm --filter @vojtechsimetka/swarm-id build
 
+      - name: Configure npm registry
+        run: echo "registry=https://registry.npmjs.org/" > ~/.npmrc
+
       - name: Publish to npm
         working-directory: lib
         run: npm publish --provenance --access public
