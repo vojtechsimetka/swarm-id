@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.2.0...swarm-id-v0.3.0) (2026-03-23)
+
+
+### Features
+
+* test npm publish workflow ([de9a0c7](https://github.com/vojtechsimetka/swarm-id/commit/de9a0c7b4d3fb78e86b7b85c2996066147c751f2))
+
 ## [0.2.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.1.0...swarm-id-v0.2.0) (2026-03-23)
 
 
