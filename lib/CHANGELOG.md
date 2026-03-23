@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.4.0...swarm-id-v0.5.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** restore workspace package name ([acf0fd2](https://github.com/vojtechsimetka/swarm-id/commit/acf0fd22b768276140ebd22c4f0aa5bd2ce3bbc9))
+
 ## [0.4.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.3.0...swarm-id-v0.4.0) (2026-03-23)
 
 
