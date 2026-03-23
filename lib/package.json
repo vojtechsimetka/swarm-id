@@ -2,7 +2,7 @@
   "name": "@swarm-id/lib",
   "version": "0.3.0",
   "type": "module",
-  "description": "Swarm ID library for authentication and Bee API operations",
+  "description": "Swarm ID - Identity and key management library for Swarm network dApps",
   "main": "dist/swarm-id.esm.js",
   "module": "dist/swarm-id.esm.js",
   "types": "dist/index.d.ts",
