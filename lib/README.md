@@ -4,6 +4,8 @@ A TypeScript library for integrating Swarm ID authentication and Bee API operati
 
 Published on [npm](https://www.npmjs.com/package/@vojtechsimetka/swarm-id).
 
+## Installation
+
 ```bash
 pnpm add @vojtechsimetka/swarm-id
 ```
