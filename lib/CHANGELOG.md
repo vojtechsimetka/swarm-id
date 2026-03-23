@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.7.0...v0.8.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** mark npm publishing as done in readme ([200803d](https://github.com/vojtechsimetka/swarm-id/commit/200803df7d2284afe6d5b0122fb088da7f95a548))
+
 ## [0.7.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.6.0...v0.7.0) (2026-03-23)
 
 
