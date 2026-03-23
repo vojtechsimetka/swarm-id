@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.11.0...v0.12.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** add npm version badge to readme ([0053fa3](https://github.com/vojtechsimetka/swarm-id/commit/0053fa3f8faa70f060edee300d51e8e5a0ff623c))
+
 ## [0.11.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.10.0...v0.11.0) (2026-03-23)
 
 
