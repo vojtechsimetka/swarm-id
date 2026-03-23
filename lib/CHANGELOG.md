@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.9.0...v0.10.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** add npm install option to readme ([0d39ff1](https://github.com/vojtechsimetka/swarm-id/commit/0d39ff111d2f91b48407aa5493431f7dff7fb952))
+
 ## [0.9.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.8.0...v0.9.0) (2026-03-23)
 
 
