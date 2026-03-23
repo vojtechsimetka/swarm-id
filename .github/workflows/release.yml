@@ -48,4 +48,4 @@ jobs:
 
       - name: Publish to npm
         working-directory: lib
-        run: pnpm publish --no-git-checks --access public --provenance
+        run: npm publish --provenance --access public
