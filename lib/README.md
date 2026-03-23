@@ -432,7 +432,7 @@ pnpm lint:fix
 - [ ] Add request cancellation support
 - [ ] Add progress callbacks for uploads/downloads
 - [ ] Document security model
-- [ ] Publish to npm
+- [x] Publish to npm
 
 ## License
 
