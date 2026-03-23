@@ -1,6 +1,8 @@
-# Swarm ID Client Library
+# @vojtechsimetka/swarm-id
 
 A TypeScript library for integrating Swarm ID authentication and Bee API operations into dApps.
+
+Published on [npm](https://www.npmjs.com/package/@vojtechsimetka/swarm-id).
 
 ## Overview
 
