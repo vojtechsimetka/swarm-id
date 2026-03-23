@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.10.0...v0.11.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** consolidate install commands in readme ([d51e135](https://github.com/vojtechsimetka/swarm-id/commit/d51e135c88315daa50be6247a41b6e6052993097))
+
 ## [0.10.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.9.0...v0.10.0) (2026-03-23)
 
 
