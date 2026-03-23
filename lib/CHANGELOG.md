@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.5.0...swarm-id-v0.6.0) (2026-03-23)
+
+
+### Features
+
+* **lib:** update readme with npm package name ([cb49f56](https://github.com/vojtechsimetka/swarm-id/commit/cb49f56d88ce603cdac62b443cdedf6482d94247))
+
 ## [0.5.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.4.0...swarm-id-v0.5.0) (2026-03-23)
 
 
