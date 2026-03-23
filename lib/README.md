@@ -12,6 +12,8 @@ pnpm add @vojtechsimetka/swarm-id
 npm install @vojtechsimetka/swarm-id
 ```
 
+[![npm version](https://img.shields.io/npm/v/@vojtechsimetka/swarm-id)](https://www.npmjs.com/package/@vojtechsimetka/swarm-id)
+
 ## Overview
 
 The Swarm ID library provides a secure, iframe-based authentication system for Swarm applications. It consists of three main components:
