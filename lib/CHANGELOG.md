@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.3.0...swarm-id-v0.4.0) (2026-03-23)
+
+
+### Features
+
+* update lib package description ([6e67cdb](https://github.com/vojtechsimetka/swarm-id/commit/6e67cdba1a5170c644d0ff6850a8d2ca7fd673a4))
+
 ## [0.3.0](https://github.com/vojtechsimetka/swarm-id/compare/swarm-id-v0.2.0...swarm-id-v0.3.0) (2026-03-23)
 
 
