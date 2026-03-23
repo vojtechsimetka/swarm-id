@@ -1,0 +1,8 @@
+{
+  "packages": {
+    "lib": {
+      "release-type": "node",
+      "package-name": "@vojtechsimetka/swarm-id"
+    }
+  }
+}
