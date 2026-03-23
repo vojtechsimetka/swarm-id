@@ -4,6 +4,10 @@ A TypeScript library for integrating Swarm ID authentication and Bee API operati
 
 Published on [npm](https://www.npmjs.com/package/@vojtechsimetka/swarm-id).
 
+```bash
+pnpm add @vojtechsimetka/swarm-id
+```
+
 ## Overview
 
 The Swarm ID library provides a secure, iframe-based authentication system for Swarm applications. It consists of three main components:

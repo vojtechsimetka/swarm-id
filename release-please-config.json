@@ -3,9 +3,7 @@
     "lib": {
       "release-type": "node",
       "package-name": "@vojtechsimetka/swarm-id",
-      "extra-files": [
-        ".github/workflows/release.yml"
-      ]
+      "include-component-in-tag": false
     }
   }
 }
