@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.13.0...v0.14.0) (2026-03-24)
+
+
+### Features
+
+* **lib:** add package author ([03a09af](https://github.com/vojtechsimetka/swarm-id/commit/03a09af7df9c3c9f5eec51388030447c06caf5ff))
+
 ## [0.13.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.12.0...v0.13.0) (2026-03-24)
 
 
