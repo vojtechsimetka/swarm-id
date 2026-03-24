@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.12.0...v0.13.0) (2026-03-24)
+
+
+### Features
+
+* **lib:** configure npm trusted publishing with OIDC ([452939a](https://github.com/vojtechsimetka/swarm-id/commit/452939a961aedef2a5285e1f32682697ede53e57))
+
 ## [0.12.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.11.0...v0.12.0) (2026-03-23)
 
 
