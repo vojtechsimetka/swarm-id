@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.14.0...v0.15.0) (2026-03-31)
+
+
+### Features
+
+* improve lib package description ([1650c64](https://github.com/vojtechsimetka/swarm-id/commit/1650c6469b284cbb9671e01505ca8375ae2d7e3e))
+
 ## [0.14.0](https://github.com/vojtechsimetka/swarm-id/compare/v0.13.0...v0.14.0) (2026-03-24)
 
 
